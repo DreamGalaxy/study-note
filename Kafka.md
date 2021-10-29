@@ -12,6 +12,8 @@
 * 发送者和接收者间没有依赖性，发送者发送消息后，不管有没有接收者在运行，都不会影响到发送者下次发送消息
 * 接收者在成功接收消息后需要向队列应答成功，以便消息队列删除当前接收的消息
 
+
+
 ### 1.2发布订阅模式
 
 特点：
@@ -44,9 +46,37 @@ bin/kafka-topics.sh --bootstrap-server kafka地址:端口 --list
 
 ## 2.基础操作
 
-### 主题topic
+### 2.1 启动
 
-#### 2.1创建topic
+#### 2.1.1启动zookeeper
+
+单机或自测启动kafka自带的zk
+
+```shell
+./bin/zookeeper-server-start.bat config/zookeeper.properties
+```
+
+集群时单独部署启动zk
+
+```shell
+sh zkServer.sh start
+```
+
+#### 2.1.2启动kafka
+
+```shell
+./bin/kafka-server-start config/server.properties
+```
+
+后台启动
+
+```shell
+./bin/kafka-server-start -daemon config/server.properties
+```
+
+
+
+### 2.2创建topic
 
 创建一个主题(topic)。kafka中所有消息都是保存在主题中，要生产消息到Kafka，首先必须要有一个确定的主题。
 
@@ -57,19 +87,25 @@ bin/kafka-topics.sh --create --bootstrap-server kafkaip:端口 --topic test
 bin/kafka-topics.sh --list --bootstrap-server kafkaip:端口 
 ```
 
-#### 2.2生产消息到Kafka
+
+
+### 2.3生产消息到Kafka
 
 ```shell
 bin/kafka-console producer.sh --broker-list kafkaip:端口 --topic test
 ```
 
-#### 2.3从Kafka消费消息
+
+
+### 2.4从Kafka消费消息
 
 ```shell
 bin/kafka-console-consumer.sh --bootstrap-server kafkaip:端口 --topic test --from-beginning
 ```
 
-#### 2.4修改分区数量
+
+
+### 2.5修改分区数量
 
 ```shell
 # 设置test topic为2个分区
@@ -217,6 +253,8 @@ public class KafkaProducerTest {
 }
 ```
 
+
+
 ### 5.2 消费者程序开发
 
 * group.id：消费者组的概念，可以在一个消费者组中包含多个消费者。一个组中的消费者是共同消费kafka中topic的数据的
@@ -268,6 +306,8 @@ public class KafkaConsumerTest {
 
 }
 ```
+
+
 
 ### 5.3生产者使用异步方式生产消息
 
@@ -370,6 +410,8 @@ for (int i = 0; i < 100; i++) {
 * 在一个分区中，消息是按顺序存储的，在每个分区都有一个递增id，这个id就是偏移量offset
 * 偏移量在分区中才有意义，在分区间offset没有任何意义 
 
+
+
 ## 7.Kafka生产者幂等性与事务
 
 ### 7.1 幂等性
@@ -401,7 +443,7 @@ props.put("enable.idempotence,"true");
 
 <img src="image\image-20211011165146258.png" alt="image-20211011165146258" style="zoom:67%;" />
 
-### 7.2 Kafka事务
+
 
 ## 8.分区和副本机制
 
@@ -445,6 +487,8 @@ kafka中的消息是全局乱序的，局部partition是有序的
 props.put(ProducerConfig.PARTITIONER_CLASS_CONFIG, 自定义分区策略类.class.getName());
 ```
 
+
+
 ### 8.2 消费者组Rebalance机制
 
 #### 8.2.1 Rebalance再均衡
@@ -466,6 +510,8 @@ Rebalance触发的时机：
 #### 8.2.2 Rebalance的不良影响
 
 发生Rebalance时，所有的consumer将不再工作，共同参与再均衡，直到每个消费者都被成功分配所需要消费的分区为止（rebalance结束）
+
+
 
 ### 8.3 消费者分区分配策略
 
@@ -505,6 +551,8 @@ RoundRobinAssignor轮询策略是将消费组内所有消费者以及消费者�
 2. 在发生rebalance时，分区的分配尽可能与上一次的分配保持相同
 3. 没有发生rebalance时，Sticky粘性分配策略和RoundRobin分配策略类似
 
+
+
 ### 8.4 副本机制
 
 副本的目的就是冗余备份，当某个broker上的分区数据丢失时，依然可以保障数据可用。因为在其他broker上的副本是可用的
@@ -538,6 +586,8 @@ props.put("acks","all");
 
 **分区**是有leader和follower概念的，为了确保消费者消费的数据是一致的，只能从分区leader去读写消息，follower做的事情就是同步数据进行备份
 
+
+
 ## 9.Kafka原理
 
 ### 9.1 分区的leader和follower
@@ -567,6 +617,8 @@ props.put("acks","all");
 * AR = ISR + OSR
 * 正常情况下，所有的follower副本都应该与leader保持同步，即AR = ISR，OSR集合为空
 
+
+
 ### 9.2 Leader选举
 
 #### 9.2.1 Controller介绍
@@ -594,6 +646,8 @@ props.put("acks","all");
 
 Kafka业务很多的情况下会有很多partition，如果某个broker宕机就会出现很多partition都要重新选举leader的情况，如果使用zk来选举leader，会给zk带来巨大的压力，所以kafka中leader的选举不用zk实现
 
+
+
 ### 9.3 Leader的负载均衡
 
 #### 9.3.1 Preferred Replica
@@ -609,6 +663,8 @@ Kafka业务很多的情况下会有很多partition，如果某个broker宕机就
 
 --partition：指定需要重新分配leader的partition编号
 
+
+
 ### 9.4 Kafka生产消费数据流程
 
 #### 9.4.1 生产者写入数据流程
@@ -616,6 +672,94 @@ Kafka业务很多的情况下会有很多partition，如果某个broker宕机就
 <img src="image\image-20211027101656184.png" alt="image-20211027101656184" style="zoom: 67%;" />
 
 * 生产者从zookeeper的“/brokers/topics/主题名/partitions/分区名/state”节点找到该partition的leader
-* broker进程上的leader将消息写入到本地log中
+* broker进程上的leader将消息写入到本地log中（数学写）
 * follower从leader上拉取消息，写入到本地log，并向leader发送ACK
 * leader接收到所有的ISR的Replica的ACK后，并向生产者返回ACK
+
+#### 9.4.2 Kafka数据消费流程
+
+<img src="image\image-20211027112749046.png" alt="image-20211027112749046" style="zoom:67%;" />
+
+* kafka采取拉模型，由消费者自己记录消费状态，每个消费者互相独立地顺序地拉去每个分区的消息
+* 消费者可以按照任意的顺序消费消息。比如，消费者可以重置到旧的偏移量，重新处理之前已经消费过的消息，或者直接跳到最近的位置，从当前的时刻开始消费。
+
+
+
+<img src="image\image-20211027113400293.png" alt="image-20211027113400293" style="zoom:67%;" />
+
+* 每个consumer都可以根据默认分配策略（默认RangeAssignor），获得要消费的分区
+* 获取到consumer对应的offset（默认从ZK获取上一次消费的offset）
+* 找到该分区的leader，拉取数据
+* 消费者提交offset
+
+
+
+### 9.5 Kafka的数据存储形式
+
+#### 9.5.1 Kafka的数据存储形式
+
+* 一个topic由多个分区组成
+* 一个分区（partition）由多个segment（段）组成
+* 一个segment（段）由多个文件组成（log、index、timeindex）
+
+<img src="image\image-20211027174213618.png" alt="image-20211027174213618" style="zoom:67%;" />
+
+#### 9.5.2 存储日志
+
+kafka数据在磁盘中存储的方式
+
+* kafka中的数据保存在/data中
+* 消息是保存在【主题名-分区ID】的文件夹中
+* 文件夹中包含以下文件：
+
+| 文件名                         | 说明                                                         |
+| :----------------------------- | ------------------------------------------------------------ |
+| 00000000000000000000.index     | 索引文件，根据offset查找数据就是通过该索引文件来操作的       |
+| 00000000000000000000.log       | 日志数据文件                                                 |
+| 00000000000000000000.timeindex | 时间索引                                                     |
+| leader-epoch-checkpoint        | 持久化每个partition leader对应LEO（log end offset、日志文件中下一条消息的offset） |
+
+* 每个日志文件的文件名是骑士偏移量，因为每个分区的起始偏移量是0，所以分区日志的文件都以00000000000000000000.log开始
+* 默认的每个日志文件最大为【log.segment.bytes = 1024\*1024\*1024】1G
+
+* 为简化根据offset查找消息，kafka日志文件名设计为开始的偏移量
+
+
+
+
+
+#### 9.5.3删除消息
+
+#### 9.5.4删除消息
+
+* 在Kafka中，消息是会被**定期清理**（默认7天）的。一次删除一个segment段的日志文件
+
+* Kafka的日志管理器，会根据Kafka的配置，来决定有哪些文件可以被删除
+
+
+
+### 9.6 消息不丢失机制
+
+#### 9.6.1 broker数据不丢失
+
+生产者通过分区的leader写入数据后，所有在ISR中的follower都会从leader中复制数据，这样可以确保即使leader崩溃了，其他follower的数据仍然是可用的
+
+#### 9.6.2 生产者数据不丢失
+
+* 生产者写入leader时，可以通过ACK机制来确保数据已经成功写入。ACK机制有三个可选配置：
+
+  1. 配置ACK响应要求为 -1 时：表示所有节点都收到数据（leader和follower都收到数据）
+
+  2. 配置ACK响应要求为 1 时：表示leader收到数据
+  3. 配置ACK影响要求为 0 时：生产者只负责发送数据，不关心数据是否丢失（可能会产生数据丢失，但性能是最好的）
+
+* 生产者可以采用同步和异步两种方式发送数据
+
+  * 同步：发送一批数据给kafka后，等待kafka返回结果
+  * 异步：发送一批数据给kafka，只是提供一个回调函数
+
+说明：如果broker迟迟不给ack，而buffer又满了，开发者可以设置是否直接清空buffer中的数据
+
+#### 9.6.3 消费者数据不丢失
+
+在消费数据的时候，只要每个消费者记录好offset值即可，就能保证数据不丢失
