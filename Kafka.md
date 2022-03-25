@@ -136,6 +136,8 @@ bin/kafka-topics.sh --zookeeper kafkaip:端口 -alter --partition 2 --topic test
   * 消费者：测试消费每次拉取的数据量
 * 对比生产者和消费者：消费者的速度更快
 
+
+
 ## 4.Kafka基准测试
 
 基准测试是一种测量和评估软件性能指标的活动。我们可以通过基准测试，了解到软件、硬件的性能水平。主要测试负载的执行时间、传输速度、吞吐量、资源占用率等。
@@ -289,7 +291,7 @@ public class KafkaConsumerTest {
         // 4.使用一个循环不断从kafka的topic中拉取数据
 //        for (int i = 0; i < 100; i++) {
         while(true){
-            // 一次拉去的是一批，poll的参数是超时时间
+            // 一次拉取的是一批，poll的参数是超时时间
             ConsumerRecords<String, String> records = kafkaConsumer.poll(Duration.ofSeconds(5));
             // 5.将记录的offset、key、value都打印出来
             for (ConsumerRecord<String, String> record : records) {
@@ -406,7 +408,7 @@ for (int i = 0; i < 100; i++) {
 <img src="image\image-20211009165106985.png" alt="image-20211009165106985" style="zoom:67%;" />
 
 * offset记录着下一条要发送给Consumer的消息的序号
-* 默认kafka将offset存储在zookeeper中
+* 0.8版本前默认kafka将offset存储在zookeeper的/consumer中，但频繁访问zk，zk需要一个一个结点更新offset，不能批量或分组更新，导致offset更新成了瓶颈，0.8.x版本提供了参数`offset.storage`，可选offset存储在zookeeper还是kafka，0.9版本后默认保存在kafka集群的叫__consumer_offsets的topic中，并且ack为-1（需要全部确认）如果java客户端的版本较低，则会offset导致存储在zk中
 * 在一个分区中，消息是按顺序存储的，在每个分区都有一个递增id，这个id就是偏移量offset
 * 偏移量在分区中才有意义，在分区间offset没有任何意义 
 
@@ -784,3 +786,105 @@ Flink里有对应的每种不同机制的保证，提供Exactly-Once保障（二
 * at last once：最少一次（有可能会出现重复消费）
 * exactly once：仅有一次（事务性的保障，保证消息有且仅被处理一次）
 
+#### 9.6.5 Kafka的消息不丢失
+
+* broker消息不丢失：因为有副本replica的存在，会不断从leader中同步副本，所以，一个broker宕机，不会导致数据丢失，除非是有一个副本。
+* 生产者消息不丢失：ACK机制（配置成ALL/-1)、配置成0或者1可能会存在丢失
+* 消费者消费不丢失：重点控制offset
+  * At-least once：一种数据可能会重复消费
+  * Exactly-Once：仅被一次消费
+
+## 10 数据积压
+
+kafka消费者消费数据的速度是非常快的，但是由于处理kafka消息时，由于有一些外部IO、或者是产生网络拥堵，就会造成kafka中的数据积压（或称为数据堆积）。如果数据一直积压，会导致数据出来的实时性受较大影响。
+
+在企业中，需要有监控系统，如果出现这种情况需要尽快处理，虽然后续的Spark Stream/Flink可以实现背压机制，但是数据积累太多一定对实时系统的的实时性有影响
+
+### 10.1 解决数据积压问题
+
+当kafka出现数据积压问题时，首先要找到数据积压的原因，以下是在企业中出现数据积压的几类场景
+
+1.  数据写入MySQLS失败
+2. 因为网络延迟消费失败
+
+
+
+## 11 Kafka中的数据清理（Log Deletion）
+
+Kafka中的消息存储在磁盘中，为了控制磁盘占用空间，Kafka需要不断地对过去的一些消息进行清理工作。Kafka的每个分区都有很多的日志文件，这样也是为了方便进行日志清理。在Kafka中，提供两种日志清理方式：
+
+* 日志删除（Log Deletion）：按照指定的策略直接删除不符合条件的日志
+* 日志压缩（Log Compaction）：按照消息的key进行整合，有相同key的但有不同value值，只保留最后一个版本
+
+在Kafka的broker或topic配置中：
+
+| 配置项             | 配置值         | 说明                 |
+| ------------------ | -------------- | -------------------- |
+| log.cleaner.enable | true（默认）   | 开启自动日志清理功能 |
+| log.cleanup.policy | true（默认）   | 删除日志             |
+| log.cleanup.policy | compact        | 压缩日志             |
+| log.cleanup.policy | delete,compact | 同时支持删除、压缩   |
+
+
+
+### 11.1 日志删除
+
+日志删除是以段（segment日志）为单位来进行定期清理的
+
+#### 11.1.1 定时日志删除任务
+
+kafka日志管理器中会有一个专门的日志删除任务来定期检查和删除不符合保留条件的日志分段文件，这个周期可以通过broker端参数log.retention.check.interval.ms来配置，默认为300,000，即5分钟。当前日志保留策略有三种：
+
+1.基于时间的保留策略
+
+2.基于日志大小的保留策略
+
+3.基于日志起始偏移量的保留策略
+
+#### 11.1.2 基于时间的保留策略
+
+以下三种配置可以指定如果Kafka中的消息超过指定的阈值，就会将日志进行自动清理：
+
+* log.retention.hours
+* log.retention.minutes
+* log.retention.ms
+
+其中优先级为 log.retention.ms > log.retention.minutes > log.retention.hours。默认情况，在broker中，配置如下：
+
+log.rentention.hours=168
+
+也就是默认日志的保留时间为168小时，相当于保留7天
+
+
+
+删除日志分段时：
+
+1. 从日志文件对象中所维护日志分段的跳跃表中移除待删除的日至分段，以保证没有线程对这些日志分段进行读取操作
+2. 将日志分段文件添加上“.delete”的后缀（也包括日志分段对应的索引文件）
+3. Kafka的后台定时任务会定期删除这些“.delete”为后缀的文件，这个任务的延迟执行时间可以通过file.delete.delay.ms参数来设置，默认值为60000，即1分钟
+
+
+
+## Kafka版本里程碑
+
+### 0.8.2版本
+
+- 为了提高吞吐量，producer 都以异步批量的方式发送消息到 broker 节点。
+- consumer 的消费偏移位置 offset 由原来的保存在 zookeeper 改为保存在 kafka 本身。
+
+### 0.9版本
+
+- 增加安全相关特性，客户端连接 kafka 可以使用ssl或者sasl进行验证。
+- 增加 kafka connect 模块
+- 新的 consumer api
+
+### 1.0.0版本
+
+- 支持 java 9
+- 增强 stream api
+- 引入了线程协议，便于升级
+
+### 2.0.0版本
+
+- 最低支持 java8
+- 弃用多处 scala 相关的依赖，java 成主流
