@@ -14,8 +14,8 @@ channel类似于Stream，它就是读写的**双向通道**，可以从channel�
 
 * FileChannel（文件）
 * DatagramChannel（UDP）
-* SocketChannel(TCP，客户端服务器都能用)
-* SeverSocketChannel(TCP，专用于服务器)
+* SocketChannel（TCP，客户端服务器都能用）
+* SeverSocketChannel（TCP，专用于服务器）
 
 
 
@@ -1059,3 +1059,408 @@ AIO用来解决数据复制阶段的阻塞问题
 > * Windows系统通过IOCP实现了真正的异步IO
 > * Linux系统异步IO在2.6版本引入，但其底层实现还是用多路复用模拟了异步IO，性能没有优势
 
+
+
+# Netty
+
+## 1、概述
+
+Netty是一个异步的，基于事件驱动的网络应用框架，用于快速开发可维护、高性能的网络服务器和客户端
+
+## 2、入门案例
+
+服务端代码
+
+```java
+@Slf4j
+public class TestNettyServer {
+    public static void main(String[] args) {
+        // 1.启动器，负责组装netty组件，启动服务器
+        new ServerBootstrap()
+                // 2.BossEventLoop,WorkerEventLoop(Selector,thread),group组
+                .group(new NioEventLoopGroup())
+                // 3.选择 服务器的ServerSocketChannel实现
+                .channel(NioServerSocketChannel.class)
+                // 4.boss负责处理连接，worker(child)负责处理读写，决定了worker(child)能执行哪些操作（handler）
+                .childHandler(
+                        // 5.channel代表和客户端进行数据读写的通道Initializer初始化，负责添加别的handler
+                        new ChannelInitializer<NioSocketChannel>() {
+                            @Override
+                            protected void initChannel(NioSocketChannel ch) throws Exception {
+                                // 6.添加具体的handler
+                                // 将ByteBuf转为字符串
+                                ch.pipeline().addLast(new StringDecoder());
+                                // 自定义handler
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                                    @Override
+                                    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                        // 打印上一步转换好的字符串
+                                        log.info("{}",msg);
+                                    }
+                                });
+                            }
+                        }
+                )
+                // 7.绑定监听端口
+                .bind(8080);
+    }
+}
+```
+
+
+
+客户端代码
+
+```java
+@Slf4j
+public class TestNettyClient {
+    public static void main(String[] args) throws InterruptedException {
+        // 1.启动类
+        new Bootstrap()
+                // 2.添加EventLoop
+                .group(new NioEventLoopGroup())
+                // 3.选择客户端channel实现
+                .channel(NioSocketChannel.class)
+                // 4.添加处理器
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        // 连接建立后使用
+                        ch.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                // 连接到服务器
+                .connect(new InetSocketAddress("localhost", 8080))
+                .sync()
+                .channel()
+                .writeAndFlush("hello netty");
+
+    }
+}
+```
+
+流程如下图
+
+![image-20220428104128186](image\image-20220428104128186.png)
+
+
+
+## 3、组件
+
+### 3.1 理解
+
+* channel理解为数据的通道
+* msg理解为流动的数据，最开始输入是ByteBuf，但经过pipeline的加工，会变成其他类型的对象，最后输出又变成ByteBuf
+* handler理解为数据的处理工序
+  * 工序有多道，合在一起就是pipeline，pipeline负责发布事件（读、读取完成...）传播给每个handler，handler对自己感兴趣的事件进行处理（重写了相应事件处理方法）
+  * handler分为Inbound和Outbound两类
+* eventLoop理解为处理数据的工人
+  * 工人可以管理多个channel的io操作，并且一旦工人负责了某个channel，就要负责到底（绑定）
+  * 工人既可以执行io操作，也可以进行任务处理，每位工人有任务队列，队列里可以堆放多个channel的待处理任务，任务分为普通任务、定时任务
+  * 工人按照pipeline的顺序，依次按照handler的规划（代码）处理数据，可以为每道工序指定不同的工人
+
+
+
+### 3.2 EventLoop
+
+EventLoop本质是一个单线程执行器（同时维护了一个Selector），里面有run方法处理channel上源源不断io事件。
+
+它的继承关系比较复杂
+
+* 一条线是继承自`j.u.c.ScheduledExecutorService`因此包含了线程池中的所有方法
+* 另一条线是继承自netty自己的OrderedEventExecutor
+  * 提供了boolean inEventLoop(Thread thread)方法判断一个线程是否属于此EventLoop
+  * 提供了parent方法来看自己属于哪个EventLoopGroup
+
+
+
+EventLoopGroup是一组EventLoop，Channel一般会调用EventLoopGroup的register方法来绑定其中一个EventLoop，后续这个Channel上的io事件都由次EventLoop来处理（保证了io事件处理时的线程安全）
+
+* 继承自netty自己的EventExecutorGroup
+  * 实现了Iterable接口提供遍历EventLoop的能力
+  * 另有next方法获取集合中下一个EventLoop
+
+
+
+**种类：**
+
+* NioEventLoopGroup
+
+  能处理io事件，普通任务，定时任务
+
+  可以指定EventLoop的数量，未指定时为 2倍cpu数量，最小为1
+
+  通过group.next()方法可以获取一个EventLoop，达到上限时会从头循环
+
+  
+
+* DefaultEventLoopGroup
+
+  能处理普通任务和定时任务
+
+
+
+EventLoopGroup中的EventLoop会轮流负责新的channel，并且一旦EventLoop与Channel进行绑定，会一直负责处理改channel中的事件
+
+<img src="image\image-20220429102138172.png" alt="image-20220428104128186" style="zoom:50%;" />
+
+
+
+**分工：**
+
+Bootstrap()的group()<font color="red">可以传两个EventLoopGroup</font>，<font color="blue">第一个作为boss</font>，<font color="green">第二个作为worker</font>
+
+* boss只负责ServerSocketChannel上的accept事件（不需要特别指定boss的线程为1，因为一个服务只有一个ServerSocketChannel，即使创建的线程池数量大于1也不会使用）
+* worker只负责socketChannel上的读写事件。
+
+
+
+当有耗时业务时，为了避免worker处理耗时任务阻塞其他channel的读写事件，可以创建额外的EventLoopGroup专门处理耗时业务，在pipeline.addLast方法的第一个参数可以指定EventLoopGroup
+
+
+
+优化分工后的结构及代码如下：
+
+<img src="image\image-20220429110838554.png" alt="image-20220429110838554" style="zoom: 50%;" />
+
+```java
+public static void main(String[] args) {
+    // 用于处理耗时业务的独立EventLoopGroup
+    EventLoopGroup business = new DefaultEventLoop();
+    new ServerBootstrap()
+            // 传递两个NioEventLoopGroup，第一个为boss，第二个为worker
+            .group(new NioEventLoopGroup(), new NioEventLoopGroup())
+            .channel(NioServerSocketChannel.class)
+            .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast("handler1", new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                            ByteBuf buf = (ByteBuf) msg;
+                            log.info("{}", buf.toString(StandardCharsets.UTF_8));
+                            // 把消息传递给下一个handler
+                            ctx.fireChannelRead(msg);
+                        }
+                    });
+                    // 指定处理该handler的eventLoop为自定义的business，避免因为业务耗时过长导致worker不能及时处理其他channel的任务
+                    ch.pipeline().addLast(business, "handler2", new ChannelInboundHandlerAdapter() {
+                        @Override
+                        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                            ByteBuf buf = (ByteBuf) msg;
+                            log.info("{}", buf.toString(StandardCharsets.UTF_8));
+                        }
+                    });
+                }
+            })
+            .bind(8080);
+}
+```
+
+
+
+handler中如何执行换eventLoop
+
+如果两个handler绑定的是同一个eventLoop就直接调用，否则把要调用的代码封装为一个任务对象，由下一个handler线程来调用
+
+关键代码在`io.netty.channel.AbstractChannelHandlerContext#invokeChannelRead`
+
+```java
+static void invokeChannelRead(final AbstractChannelHandlerContext next, Object msg) {
+    final Object m = next.pipeline.touch(ObjectUtil.checkNotNull(msg, "msg"), next);
+    // 获得下一个handler的eventLoop
+    EventExecutor executor = next.executor();
+    // 是同一个任务则直接执行任务
+    if (executor.inEventLoop()) {
+        next.invokeChannelRead(m);
+    }
+    // 否则让另一个EventLoop来创建任务并执行
+    else {
+        executor.execute(new Runnable() {
+            public void run() {
+                next.invokeChannelRead(m);
+            }
+        });
+    }
+}
+```
+
+
+
+### 3.3 Channel
+
+channel的主要作用
+
+* close()可以用来关闭channel
+* closeFuture()用来处理channel的关闭
+  * sync方法作用是同步等待channel关闭
+  * 而addListener方法是异步等待channel关闭
+* pipeline()方法添加处理器
+* write()方法将数据写入
+  * 因为缓冲机制，数据被写入到Channel后不会立即被发送
+  * **只有当缓冲区满了或者调用了flush()方法**后，才会将数据通过Channel发送出去
+* writeAndFlush()方法将数据**写入并立即刷出**
+
+
+
+#### ConnectionFuture连接问题
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    ChannelFuture channelFuture = new Bootstrap()
+            .group(new NioEventLoopGroup())
+            .channel(NioSocketChannel.class)
+            .handler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new StringEncoder());
+                }
+            })
+            // 1.连接到服务器
+            // 异步非阻塞，main发起了调用，真正执行connect的是nio线程
+            .connect(new InetSocketAddress("localhost", 8080));
+
+    // 方法一：2.使用sync方法同步等待处理结果，阻塞住当前线程，直到nio线程连接建立完毕
+    channelFuture.sync();
+    
+    // 获取客服端-服务器间的channel对象
+    Channel channel = channelFuture.channel();
+    channel.writeAndFlush("hello world");
+}
+```
+
+如果没有`channelFuture.sync();`这行代码，服务器将无法收到"hello world"。因为connect()方法建立连接是异步非阻塞的，主线程main会继续向下执行，获取channel并写入字符串，但是**此时的channel对象还没有真正地建立连接**，也就没法将数据发送到服务器
+
+`channelFuture.sync()`方法会阻塞住主线程，**同步等待**连接真正建立然后才开始发送数据
+
+
+
+异步处理的方式：添加监听器处理连接建立后的任务
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    ChannelFuture channelFuture = new Bootstrap()
+            .group(new NioEventLoopGroup())
+            .channel(NioSocketChannel.class)
+            .handler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new StringEncoder());
+                }
+            })
+            // 1.连接到服务器
+            // 异步非阻塞，main发起了调用，真正执行connect的是nio线程
+            .connect(new InetSocketAddress("localhost", 8080));
+
+    // 方法二：使用addListener 方法异步处理结果
+    channelFuture.addListener(new ChannelFutureListener() {
+        // 在nio线程连接建立完成后，会调用operationComplete方法
+        @Override
+        public void operationComplete(ChannelFuture future) throws Exception {
+            Channel channel = future.channel();
+            channel.writeAndFlush("hello world");
+        }
+    });
+}
+```
+
+
+
+#### Channel关闭
+
+同步阻塞等待关闭并进行后续处理
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    NioEventLoopGroup group = new NioEventLoopGroup();
+    ChannelFuture channelFuture = new Bootstrap()
+            .group(group)
+            .channel(NioSocketChannel.class)
+            .handler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new LoggingHandler());
+                    ch.pipeline().addLast(new StringEncoder());
+                }
+            }).connect(new InetSocketAddress("localhost", 8080));
+    Channel channel = channelFuture.sync().channel();
+    log.debug("{}", channel);
+    new Thread(() -> {
+        Scanner sc = new Scanner(System.in);
+        while (true) {
+            String line = sc.nextLine();
+            if ("q".equals(line)) {
+                channel.close();
+                // close是异步操作，不能在这里做一些close后的处理工作
+                break;
+            }
+            channel.writeAndFlush(line);
+        }
+    });
+    ChannelFuture closeFuture = channel.closeFuture();
+
+    // 获取ClosedFuture对象，同步阻塞等待关闭
+    log.info("waiting for close");
+    closeFuture.sync();
+    log.info("处理关闭后的操作");
+    // 优雅关闭EventLoopGroup
+    group.shutdownGracefully();
+}
+```
+
+
+
+异步关闭并进行后续处理
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    NioEventLoopGroup group = new NioEventLoopGroup();
+    ChannelFuture channelFuture = new Bootstrap()
+            .group(group)
+            .channel(NioSocketChannel.class)
+            .handler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new LoggingHandler());
+                    ch.pipeline().addLast(new StringEncoder());
+                }
+            }).connect(new InetSocketAddress("localhost", 8080));
+    Channel channel = channelFuture.sync().channel();
+    log.debug("{}", channel);
+    new Thread(() -> {
+        Scanner sc = new Scanner(System.in);
+        while (true) {
+            String line = sc.nextLine();
+            if ("q".equals(line)) {
+                channel.close();
+                // close是异步操作，不能在这里做一些close后的处理工作
+                break;
+            }
+            channel.writeAndFlush(line);
+        }
+    });
+    ChannelFuture closeFuture = channel.closeFuture();
+
+    // 异步处理关闭
+    closeFuture.addListener(new ChannelFutureListener() {
+        @Override
+        public void operationComplete(ChannelFuture future) throws Exception {
+            log.info("处理关闭后的操作");
+            // 优雅关闭EventLoopGroup
+            group.shutdownGracefully();
+        }
+    });
+}
+```
+
+
+
+### 3.4 Future & Promise
+
+在异步处理时经常用到这两个接口
+
+首先要说明netty中的Future和JDK中的future同名，但是是两个接口，netty的Future继承自JDK的Future，而Promise又对netty Future进行了扩展
+
+* jdk Future只能同步等待任务结束（或成功，或失败）才能得到结果
+* netty Future可以同步等待任务结束得到结果，也可以异步方式得到结果，但都是要等任务结束
+* netty Promise不仅有netty Future的功能，而且脱离了任务独立存在，只作为两个线程传递结果的容器
