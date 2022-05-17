@@ -1464,3 +1464,78 @@ public static void main(String[] args) throws InterruptedException {
 * jdk Future只能同步等待任务结束（或成功，或失败）才能得到结果
 * netty Future可以同步等待任务结束得到结果，也可以异步方式得到结果，但都是要等任务结束
 * netty Promise不仅有netty Future的功能，而且脱离了任务独立存在，只作为两个线程传递结果的容器
+
+| 功能/名称   | jdk Future                     | netty Future                                                 | Promise      |
+| ----------- | ------------------------------ | ------------------------------------------------------------ | ------------ |
+| cancel      | 取消任务                       | -                                                            | -            |
+| isCanceled  | 任务是否取消                   | -                                                            | -            |
+| isDone      | 任务是否完成，不能区分成功失败 | -                                                            | -            |
+| get         | 获取任务结果，阻塞等待         | -                                                            | -            |
+| getNow      | -                              | 获取任务结果，非阻塞，还未产生结果时返回null                 | -            |
+| await       | -                              | 等待任务结束，如果任务失败，不会抛异常，而是通过isSuccess判断 | -            |
+| sync        | -                              | 等待任务结束，如果任务失败，抛出异常                         | -            |
+| isSuccess   | -                              | 判断任务是否成功                                             | -            |
+| cause       | -                              | 获取失败信息，非阻塞，如果没有失败，返回null                 | -            |
+| addListener | -                              | 添加回调，异步接收结果                                       | -            |
+| setSuccess  | -                              | -                                                            | 设置成功结果 |
+| setFailure  | -                              | -                                                            | 设置失败结果 |
+
+
+
+### 3.5 Handler & Pipeline
+
+ChannelHandler用来处理Channel上的各种事件，分为入站、出站两种。所有Channel Handler被连成一串，就是Pipeline
+
+* 入站处理器通常是ChannelInBoundHandlerAdapter的子类，主要用来读取客户端数据，写回结果
+* 出站处理器通常是ChannelOutBoundHandlerAdapter的子类，主要对写回结果进行加工
+
+
+
+pipline是个双向链表，并且隐藏含有了head和tail头尾两个handler
+
+* **对于入站处理器，会从head<font color='red'>从前往后</font>调用InBoundHandler**，直到handler不是入站处理器，head -> hin1 -> hin2 -> hinn
+
+* **对于出站处理器，会从tail<font color='red'>从后往前</font>调用OutBoundHandler**，直到handler不是出站处理器，tail -> hout2 -> ... -> hout2 -> hout1
+
+入站处理器必须调用super.channelRead()/ctx.fireChannelRead才能保证数据的传递（最后一个入站处理器不需要），否则pipline就断了
+
+出站处理器必须调用super.write()才能保证数据的传递，否则pipline就断了
+
+只有入站处理器向channel中写入数据(channel.write或channel.wirteAndFlush)了，才会进入出站处理器
+
+注意区分channel.writeAndFlush和ctx.writeAndFlush，channel的是**从tail开始从后往前**寻找出站处理器，ctx是**从当前handler**从后往前寻找出站处理器
+
+![image-20220509175502859](image/image-20220509175502859.png)
+
+
+
+### 3.6 ByteBuf
+
+是对字节数据的封装，会自动扩容（翻倍），未指定容量时初始容量为256
+
+
+
+#### 3.6.1 创建
+
+```java
+// 创建一个默认的ByteBuf（池化基于直接内存的ByteBuf），初始容量是10
+ByteBuf buffer = ByteBufAllocator.DEFAULT.buffer(10);
+log(buffer);
+```
+
+log方法参考如下：
+
+```java
+private static void log(ByteBuf buffer) {
+    int length = buffer.readableBytes();
+    int rows = length / 16 + (length % 15 == 0 ? 0 : 1) + 4;
+    StringBuilder buf = new StringBuilder(rows * 80 * 2)
+            .append("read index:").append(buffer.readerIndex())
+            .append(" write index:").append(buffer.writerIndex())
+            .append(" capacity:").append(buffer.capacity())
+            .append(NEWLINE);
+    ByteBufUtil.appendPrettyHexDump(buf, buffer);
+    System.out.println(buf.toString());
+}
+```
+
