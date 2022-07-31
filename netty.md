@@ -1188,7 +1188,7 @@ EventLoopGroup是一组EventLoop，Channel一般会调用EventLoopGroup的regist
 
   能处理io事件，普通任务，定时任务
 
-  可以指定EventLoop的数量，未指定时为 2倍cpu数量，最小为1
+  可以指定EventLoop的数量，未指定时为 2倍cpu数量，最小为1，对于BOSS组，每个端口占用一个线程，设置数量大于端口数量时，多余的线程不会使用
 
   通过group.next()方法可以获取一个EventLoop，达到上限时会从头循环
 
@@ -1300,6 +1300,10 @@ channel的主要作用
   * 因为缓冲机制，数据被写入到Channel后不会立即被发送
   * **只有当缓冲区满了或者调用了flush()方法**后，才会将数据通过Channel发送出去
 * writeAndFlush()方法将数据**写入并立即刷出**
+
+
+
+option和childOption可以设置一些channel的参数，option是全局的，childOption是内部handler的
 
 
 
@@ -1459,7 +1463,7 @@ public static void main(String[] args) throws InterruptedException {
 
 在异步处理时经常用到这两个接口
 
-首先要说明netty中的Future和JDK中的future同名，但是是两个接口，netty的Future继承自JDK的Future，而Promise又对netty Future进行了扩展
+首先要说明netty中的Future和JDK中的Future同名，但是是两个接口，netty的Future继承自JDK的Future，而Promise又对netty Future进行了扩展
 
 * jdk Future只能同步等待任务结束（或成功，或失败）才能得到结果
 * netty Future可以同步等待任务结束得到结果，也可以异步方式得到结果，但都是要等任务结束
@@ -1503,23 +1507,58 @@ pipline是个双向链表，并且隐藏含有了head和tail头尾两个handler
 
 只有入站处理器向channel中写入数据(channel.write或channel.wirteAndFlush)了，才会进入出站处理器
 
-注意区分channel.writeAndFlush和ctx.writeAndFlush，channel的是**从tail开始从后往前**寻找出站处理器，ctx是**从当前handler**从后往前寻找出站处理器
+<font color = 'red'>注意区分ctx.channel.writeAndFlush和ctx.writeAndFlush</font>，ctx.channel的是**从tail开始从后往前**寻找出站处理器，ctx是**从当前handler**从后往前寻找出站处理器
 
 ![image-20220509175502859](image/image-20220509175502859.png)
 
 
 
+netty中有一个打印日志的handler：`new LoggingHandler(LogLevel.DEBUG)`，方便调试
+
+
+
+**EmbeddedChannel** 
+
+是一个用于测试的channel，可以自己模拟使用handler进行入站出站操作
+
+模拟入站
+
+```java
+EmbeddedChannel channel = new EmbeddedChannel(inboundHandler1, inboudnHandler2, ..., outboundHandler1, outboudnHandler2, ...);
+channel.writeInbound(ByteBufAllocator.DEFAULT.buffer().writeBytes("hello").getBytes());
+```
+
+模拟出站
+
+```java
+EmbeddedChannel channel = new EmbeddedChannel(inboundHandler1, inboudnHandler2, ..., outboundHandler1, outboudnHandler2, ...);
+channel.writeOutbound(ByteBufAllocator.DEFAULT.buffer().writeBytes("world").getBytes());
+```
+
+
+
+
+
 ### 3.6 ByteBuf
 
-是对字节数据的封装，会自动扩容（翻倍），未指定容量时初始容量为256
+是对字节数据的封装
 
+优势：
 
+* 池化-可以重用池中的ByteBuf实例，更节约内存，减少内存溢出的可能性
+* 读写指针分离，不需要像ByteBuffer一样通过flip切换读写模式
+* 可以自动扩容，未指定容量时**初始容量为256**
+* 支持链式调用，使用更流畅
+* 很多地方体现零拷贝，如slice、duplicate、compositeByteBuf
 
 #### 3.6.1 创建
 
+byteBuf创建时未指定容量默认为256，此外ByteBuf是会动态扩容的，容量最大值是int最大值
+
 ```java
-// 创建一个默认的ByteBuf（池化基于直接内存的ByteBuf），初始容量是10
+// 下面创建一个默认的ByteBuf（池化基于直接内存的ByteBuf），指定的初始容量是10
 ByteBuf buffer = ByteBufAllocator.DEFAULT.buffer(10);
+buffer.writeBytes("hello".getBytes());
 log(buffer);
 ```
 
@@ -1536,6 +1575,410 @@ private static void log(ByteBuf buffer) {
             .append(NEWLINE);
     ByteBufUtil.appendPrettyHexDump(buf, buffer);
     System.out.println(buf.toString());
+}
+```
+
+
+
+在netty的handler中不建议直接通过`ByteBufAllocator.DEFAULT.buffer`申请内存，建议使用`ctx.alloc().buffer()`方法创建
+
+
+
+#### 3.6.2 直接内存 vs 堆内存
+
+可以使用下面的代码来创建池化基于堆的ByteBuf
+
+```java
+ByteBuf buffer = ByteBufAllocator.DEFAULT.heapBuffer(10);
+```
+
+也可以使用下面的代码来创建池化基于直接内存的ByteBuf
+
+```java
+ByteBuf buffer = ByteBufAllocator.DEFAULT.directBuffer(10);
+```
+
+* 直接内存创建和销毁的代价昂贵，但读写性能高（少一次内存复制，IO可以直接操作直接内存，直接内存可以映射到JVM内存中，减少了一次系统内存到JVM内存的拷贝），适合配合池化功能一起使用
+* 直接内存对GC压力小，因为这部分内存不受JVM垃圾回收的管理，但也要注意及时主动释放
+
+
+
+#### 3.6.3 池化 vs 非池化
+
+池化的最大意义在于可以重用ByteBuf，优点有：
+
+* 没有池化，每次都要重建新的ByteBuf实例，这个操作对直接内存代价昂贵，就算是堆内存，也会增加GC压力
+* 有了池化，则可以重用池中的ByteBuf实例，并且采用了与jemalloc类似的内存分配算法提升分配效率
+* 高并发时，池化能更节约内存，减少内存溢出的可能
+
+池化功能是否开启，可以通过下面的系统环境变量来设置
+
+```
+-Dio.netty.allocator.type={unpooled|pooled}
+```
+
+* 4.1以后，非Andorid平台默认启用池化实现，Andorid平台启用非池化实现
+* 4.1以前，池化功能还不成熟，默认是非池化实现
+
+
+
+#### 3.6.4 组成
+
+ByteBuf由4部分组成：
+
+* 已经读过的部分是废弃部分
+
+* 读指针和写指针直接是可读部分
+
+* 写指针和容量之间是可写部分
+
+* 容量和最大容量之间是可扩容部分
+
+和NIO中的ByteBuffer相比，读写切换时不需要自己进行flip操作，并且可自动扩容
+
+<img src="image\image-20220724113639632.png" alt="image-20220724113639632" style="zoom:50%;" />
+
+最开始读写指针都在0位置
+
+
+
+#### 3.6.5 写入
+
+ByteBuf支持各种内置类型的写入，但有些特殊实现
+
+| 方法名                      | 含义          | 备注                                                   |
+| --------------------------- | ------------- | ------------------------------------------------------ |
+| writeBoolean(boolean value) | 写入boolean值 | 用1字节 01\|00代表true\|false                          |
+| writeInt(int value)         | 写入int值     | Big Endian，即大端，例如0x250，写入后为 00 00 02 50    |
+| writeIntLE(int value)       | 写入int值     | Little Endian，即小端，例如0x250，写入后为 50 02 00 00 |
+
+注意：
+
+* 这些方法未指明返回值，其返回值都是ByteBuf，意味着可以链式调用
+* 网络传输，默认习惯都是大端传输
+
+
+
+#### 3.6.6 扩容
+
+写入容量不足时会引发扩容，扩容规则是：
+
+* 如果写入后数据大小未超过512，则选择下一个16的整数倍，例如写入前为10，写入后为12，则扩容后容量是16
+* 如果写入后数据数据大小超过512，则选择下一个2^n，例如写入后大小为513，则扩容后容量是1024
+* 扩容不能超过max capacity，否则会报错
+
+
+
+#### 3.6.7 读取
+
+读过的内容属于废弃部分，再读只能读取那些尚未读取的部分
+
+如果需要重复读取，可以在读取前mark标记一下，读完需要重复读时，reset重置到标记位置
+
+```java
+bytebuf.markReaderIndex();
+bytebuf.readByte();
+bytebuf.resetReaderIndex();
+```
+
+
+
+还有一种重复读取的方式，读取时使用get开头的一些方法，这些方法不会改变读指针的index
+
+
+
+#### 3.6.8 retain & release
+
+由于Netty中有堆外内存的ByteBuf实现，堆外内存最好是手动来释放，而不是等GC垃圾回收。
+
+* UnpooledHeapByteBuf使用的是JVM内存，只需等待GC回收内存即可
+* UnpooledDirectByteBuf使用的是直接内存，需要特殊的方法来回收内存
+* PooledByteBuf和它的子类使用了池化机制，需要复杂的规则来回收内存
+
+
+
+回收你吃的源码实现，需要关注下面方法的不同实现
+
+```java
+protected abstract void deallocated();
+```
+
+
+
+Netty采用了引用计数法来控制回收内存，每个ByteBuf都实现了ReferenceCounted接口
+
+* 每个ByteBuf对象的初始计数为1
+* 调用release方法计数减1，如果计数为0，ByteBuf内存被回收
+* 调用retain方法计数器加1，表示调用者没用完之前，其他handler即使调用了release也不会造成回收
+* 当计数器为0时，底层内存会被回收，这时即使ByteBuf对象还在，其各个方法均无法正常使用
+
+
+
+​		因为pipeline的存在，一般需要将ByteBuf传递给下一个ChannelHandler，如果在某个handler的finally中release了，就失去了传递性（如果在这个ChannelHandler内这个ByteBuf已经完成了它的使命，那么便无需再传递）
+
+​		基本规则是，**谁是最后的使用者，谁负责release**。如果ByteBuf一直向下传递没有变化，那头或尾handler会对其进行释放，但如果向下传递的ByteBuf变化了，比如转为String了，这时就需要自己进行释放。
+
+
+
+​		tail的实现类是`TailContext`，实现了ChannelInboundHandler（进行入站收尾），在`channelRead`方法中有释放逻辑，如果传入的msg是ReferenceCounted对象，则调用其release()方法，是其他类对象则不处理。
+
+​		head的实现类是`HeadContext`，同时实现类ChannelInboundHandler和ChannelOutboundHandler（入站进入和出站收尾），在`write`方法中
+
+​		`SimpleChannelInboundHandler`在`ChannelRead0`方法退出时会自动释放未释放的资源，而`ChannelInboundHandlerAdapter`不会，需要手动释放，如不释放，会造成内存泄露
+
+#### 3.6.9 slice
+
+**零拷贝**（非NIO的零拷贝概念，而是这块内存使用原有内存没有拷贝的意思）的体现之一，对原始ByteBuf进行切片成多个ByteBuf，切片后的ByteBuf并没有发生内存复制，还是**使用原始ByteBuf的内存**，切片后的ByteBuf维护独立的read，write指针
+
+<img src="image\image-20220730230727169.png" alt="image-20220730230727169" style="zoom: 67%;" />
+
+```java
+ByteBuf buf = ButeBufAllocator.DEFAULT.buffer(10);
+buf.write(new byte[]{'0',1','2','3','4','5','6','7','8','9'});
+Bytebuf slice1 = buf.slice(0, 5);
+Bytebuf slice2 = buf.slice(5, 5);
+slice1.setByte(0,'a');
+```
+
+注意：
+
+* slice切出来的ByteBuf的max和capacity被固定为当前大小，所以不能通过wirte追加内容
+* 无参slice是从原始ByteBuf的read index到write index之间的内容进行切片
+
+* 原始byteBuf调用release后会导致slice的内存不能使用，所以可以在使用slice时retain，使用完成后再release slice
+
+
+
+#### 3.6.10 duplicate
+
+**零拷贝**的体现之一，就好比截取了原始yteBuf所有内容，并且**没有max和capacity的限制**，也是**与原始ByteBuf使用同一块底层内存**，并且读写指针是独立的
+
+
+
+<img src="image\image-20220731144318244.png" alt="image-20220731144318244" style="zoom:67%;" />
+
+
+
+#### 3.6.11 copy
+
+会将底层内存数据进行深拷贝，因此无论读写都与原始ByteBuf无关
+
+
+
+#### 3.6.12 compositeByteBuf
+
+**零拷贝**的体现之一，不用拷贝将几块ByteBuf进行组合
+
+* 类似slice同样需要注意如果子byteBuf被release后组合出的compositebByteBuf也会访问出错，所以最好手动retain和release组合后的compositebByteBuf
+
+* 缺点是操作复杂了很多，多次操作会带来性能损耗
+
+```java
+ByteBuf buf1 = ByteBufAllocator.DEFAULT.buffer(5);
+buf1.writeBytes(new byte[]{1, 2, 3, 4, 5});
+
+ByteBuf buf2 = ByteBufAllocator.DEFAULT.buffer(5);
+buf2.writeBytes(new byte[]{6, 7, 8, 9, 10});
+
+// 不推荐写法：新申请一块内存并分别写入
+ByteBuf buffer = ByteBufAllocator.DEFAULT.buffer(10);
+buffer.writeBytes(buf1).writeBytes(buf2);
+
+// 将多个byteBuf组合，避免了内存的符合但维护会更加复杂
+CompositeByteBuf compositeByteBuf = ByteBufAllocator.DEFAULT.compositeBuffer();
+// 第一个boolean的变量不能丢，否则写指针不会增长不会真正把几个buf写进去
+compositeByteBuf.addComponents(true, buf1, buf2);
+```
+
+
+
+#### 3.6.13 Unpooled
+
+Unpooled是一个工具类，提供了非池化的ByteBuf创建、组合、复制等操作
+
+其中wrappedBuffer方法也是**零拷贝**的，可以用来包装ByteBuf
+
+
+
+### 4、总结
+
+并非只有netty nio的多路复用IO模型读写是不互相阻塞的，java的socket本身也是全双工的，在任意时刻即使是阻塞IO，读和写也是可以同时进行的，只要分别采用读、写线程即可。因为tcp本身就是全双工的协议。
+
+
+
+# Netty进阶
+
+## 1、 粘包与半包
+
+### 1.1 粘包
+
+现象：发送abc   def接收到abcdef
+
+原因：
+
+* 应用层：接收方ByteBuf设置太大（Netty默认1024）
+* 滑动窗口：假设发送方256bytes表示一个完整报文，但由于接收方处理不及时且窗口大小足够大，这256bytes字节就会缓冲在接收方的滑动窗口中，当滑动窗口缓冲了多个报文就会粘包
+* Nagle算法：在一定时间范围内，发送缓冲区未满时不发送数据，满了才发送，会造成粘包
+
+
+
+### 1.2 半包
+
+现象：发送abcdef，接收方收到abc def
+
+原因：
+
+* 应用层：接收方ByteBuf小于实际发送的数据量
+* 滑动窗口：假设接收方的窗口只剩128bytes，发送方的报文大小是256bytes，这时接收方没法一次接受，只能先发送前128bytes，等待ack窗口滑动后才能发送剩余部分，这就造成了半包
+* MSS限制：当发送的数据超过MSS限制后，会将数据切分发送，就会造成半包
+
+
+
+粘包和半包的本质是因为TCP协议是流式协议，消息无边界
+
+
+
+### 1.3 解决方式
+
+* 短连接可以解决粘包问题，但每次开关连接不够高效，并且解决不了半包问题。
+
+* 通过解码器Decoder来组装半包报文：
+  * 定长解码器`FixedLengthFrameDecoder`
+  * 行解码器`LineBasedFrameDecoder`，以\n或\r\n作为结尾，创建时需要指定最大长度，当超过最大长度也没有找到换行符时会抛出异常
+  * 自定义字段行解码器`DelimiterBasedFrameDecoder`，创建时需要指定最大长度和分隔符
+  * 基于长度字段的解码器`LengthFieldBasedFrameDecoder`，有四个参数
+    * maxFrameLength：最大长度
+    * lengthFieldOffset：长度字段偏移量
+    * lengthFieldLength：长度字段长度
+    * lengthAdjustment：以长度字段为基准，有几个字节是内容
+    * initialBytesToStrip：从头剥离几个字节
+
+
+
+### 2、协议设计与实现
+
+#### redis客户端实现
+
+```java
+public static void main(String[] args) {
+    NioEventLoopGroup worker = new NioEventLoopGroup();
+    try {
+        Bootstrap bootstrap = new Bootstrap().group(worker)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new LoggingHandler(LogLevel.DEBUG))
+                                .addLast(new ChannelInboundHandlerAdapter() {
+                                    @Override
+                                    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                                        ByteBuf buf = ctx.alloc().buffer();
+                                        // 数组长度
+                                        buf.writeBytes("*3".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+                                        // 字符串长度
+                                        buf.writeBytes("$3".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+                                        // 字符串
+                                        buf.writeBytes("set".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+
+                                        buf.writeBytes("$4".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+                                        buf.writeBytes("name".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+
+                                        buf.writeBytes("$8".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+                                        buf.writeBytes("zhangsan".getBytes());
+                                        buf.writeBytes("\r\n".getBytes());
+                                        ctx.writeAndFlush(buf);
+                                    }
+
+                                    @Override
+                                    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                        ByteBuf buf = (ByteBuf) msg;
+                                        log.info("redis返回内容：{}", buf.toString(Charset.defaultCharset()));
+                                    }
+                                });
+                    }
+                });
+        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 6379).sync();
+        channelFuture.channel().closeFuture().sync();
+    } catch (InterruptedException e) {
+        log.error("client error", e);
+    } finally {
+        worker.shutdownGracefully();
+    }
+}
+```
+
+
+
+#### http服务端实现
+
+Netty提供了Http的编解码器handler，`HttpRequestDecoder`和`HttpResponseEncoder`，或者使用二者的结合
+
+`HttpServerCodec`(CombinedChannelDuplexHandler<HttpRequestDecoder, HttpResponseEncoder>)
+
+
+
+对于http报文，HttpRequestDecoder会将其解析为DefaultHttpRequest和LastHttpContext两部分：
+
+* DefaultHttpRequest：包含请求行和请求头
+* LastHttpContext：包含请求体，可能会因为报文过大被解析为好几个对象
+
+所以一个http请求最少会被分成两次向后传递，第一次是请求行和请求头，第二次是请求体，如果发送的消息体比较大的话，可能还会分成好几个消息体来处理，往后传递多次。
+
+可以使用`HttpObjectAggregator`将消息聚合成一个
+
+
+
+`SimpleChannelInboundHandler<T>`可以指定所处理的消息是什么类（T）的
+
+```java
+public static void main(String[] args) {
+    EventLoopGroup boss = new NioEventLoopGroup(1);
+    EventLoopGroup worker = new NioEventLoopGroup(4);
+    try {
+        ServerBootstrap serverBootstrap = new ServerBootstrap().group(boss, worker)
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel channel) throws Exception {
+                        channel.pipeline().addLast(new LoggingHandler(LogLevel.DEBUG))
+                                .addLast(new HttpServerCodec())
+                                .addLast(new HttpObjectAggregator(5 * 1024 * 1024))
+                                .addLast(new SimpleChannelInboundHandler<FullHttpRequest>() {
+                                    @Override
+                                    protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+                                        log.info("请求行：{}\n", request.uri());
+                                        log.info("请求头：{}\n", request);
+                                        log.info("请求体：{}\n", request.content().toString(StandardCharsets.UTF_8));
+
+                                        // 返回响应，协议与请求的版本一致
+                                        DefaultFullHttpResponse response =
+                                                new DefaultFullHttpResponse(request.protocolVersion(), HttpResponseStatus.OK);
+                                        byte[] bytes = "success".getBytes();
+                                        // 设置Content-Length避免客户端不知道什么时候结束
+                                        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bytes.length);
+                                        response.content().writeBytes(bytes);
+                                        // 写回响应
+                                        ctx.writeAndFlush(response);
+                                        // 如果要改为短连接，则直接关闭
+                                        //ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+                                    }
+                                });
+                    }
+                });
+        ChannelFuture channelFuture = serverBootstrap.bind(8080).sync();
+        channelFuture.channel().closeFuture().sync();
+    } catch (InterruptedException e) {
+        log.error("server error", e);
+    } finally {
+        boss.shutdownGracefully();
+        worker.shutdownGracefully();
+    }
 }
 ```
 
