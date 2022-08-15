@@ -1745,7 +1745,7 @@ slice1.setByte(0,'a');
 * slice切出来的ByteBuf的max和capacity被固定为当前大小，所以不能通过wirte追加内容
 * 无参slice是从原始ByteBuf的read index到write index之间的内容进行切片
 
-* 原始byteBuf调用release后会导致slice的内存不能使用，所以可以在使用slice时retain，使用完成后再release slice
+* 原始byteBuf调用release后会导致slice的内存不能使用，所以可以在使用slice时retain，使用完成后再release slice，例如EmbeddedChannel调用writeInbound(slice1)就会release原byteBuf
 
 
 
@@ -1855,9 +1855,9 @@ Unpooled是一个工具类，提供了非池化的ByteBuf创建、组合、复�
 
 
 
-### 2、协议设计与实现
+## 2、协议设计与实现
 
-#### redis客户端实现
+### 2.1 redis客户端实现
 
 ```java
 public static void main(String[] args) {
@@ -1915,7 +1915,7 @@ public static void main(String[] args) {
 
 
 
-#### http服务端实现
+### 2.2 http服务端实现
 
 Netty提供了Http的编解码器handler，`HttpRequestDecoder`和`HttpResponseEncoder`，或者使用二者的结合
 
@@ -1982,3 +1982,117 @@ public static void main(String[] args) {
 }
 ```
 
+
+
+### 2.3 自定义协议要素
+
+* 魔数：用来在第一时间判断是否是无效数据包
+* 版本号：可以支持协议的升级
+* 序列化算法：消息正文到底采用哪种序列化反序列化方式，可以由此扩展，例如json、protobuf、hession、jdk
+* 指令类型：是登陆、注册、单聊、群聊...跟业务相关
+* 请求序列号：为了双工通信，提供异步能力
+
+* 正文长度
+* 消息正文
+
+
+
+## 3、优化
+
+### 3.1 @Sharebale
+
+对于一些无状态的handler（不会保存之前的消息信息，例如LoggingHandler），可以通过@Sharebale注解创建一个对象进行复用，避免每个请求创建，但对于有状态的handler是不行的（例如LengthFieldBasedFrameDecoder，因为LengthFieldBasedFrameDecoder需要记录之前收到的消息，等待拼接为一条完整的消息）。
+
+在ByteToMessageCodec的构造方法里，校验了该类的子类不能是@Sharebale的，但能确定自己的解码器在帧解码器后是一条完整的消息不会保存之前的状态的情况下，可以改为继承MessageToMessageCodec<ByteBuf，自己的类>，这样就能使用@Sharebale注解了
+
+
+
+### 3.2 空闲检测IdleStateHandler
+
+构造方法为IdleStateHandler(读空闲时间, 写空闲时间， 读写空闲时间)
+
+当空闲时会触发IdleStateEvent事件，其中可以通过IdleState区分时间类型，包括READER_IDLE, WRITE_IDLE, ALL_IDLE
+
+可以在服务端和客户端间建立一个心跳探活，客户端写空闲n秒后发送心跳包，服务端读2n秒空闲后关闭连接
+
+```java
+channel.pipeline().addLast(new IdleStateHandler(5, 0, 0))
+        .addLast(new ChannelDuplexHandler() {
+            @Override
+            public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                super.userEventTriggered(ctx, evt);
+                // 用来触发特殊事件
+                if (evt instanceof IdleStateEvent) {
+                    IdleStateEvent idleStateEvent = (IdleStateEvent) evt;
+                    if (idleStateEvent == IdleStateEvent.READER_IDLE_STATE_EVENT) {
+                        log.info("读空闲");
+                        // TODO 通过心跳探活
+                    }
+                }
+            }
+        });
+```
+
+
+
+### 3.3 参数调优	
+
+客户端通过option()方法给SocketChannel配置参数
+
+对于服务端ServerBootstrap来说有option()和childOption()两种配置参数的方法，区别如下：
+
+* option是给ServerSocketChannel 配置参数
+* childOption是给SocketChannel 配置参数
+
+
+
+#### 3.3.1 CONNECTION_TIMEOUT_MILLS
+
+* 属于SocketChannel参数
+* 在客户端建立连接时，如果在指定毫秒内无法连接，会抛出timeout异常
+* 注意和SO_TIMEOUT作区分，SO_TIMEOUT主要用在阻塞IO，阻塞IO中accept，read都是无限等待的，如果不希望永远阻塞，使用它调整超时时间
+
+netty中可以通过option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 超时时间)来设置大小
+
+```java
+Bootstrap bootstrap = new Bootstrap().group(new NioEventLoopGroup)
+        .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+        .(...)
+```
+
+
+
+源码为AbstarctNioChannel的connect方法，超时部分代码如下图，如果设置了超时时间，会**通过eventLoop创建一个定时任务**，定时任务的时间就是超时时间，当定时任务触发时会通过和主线程**用相同的promise**向主线程抛出一个超时异常，如果没有超时则会取消这个定时任务
+
+<img src="image\image-20220807180109758.png" alt="image-20220807180109758" style="zoom:67%;" />
+
+
+
+#### 3.3.2 SO_BACKLOG
+
+* 属于ServerSocketChannel参数
+
+
+
+三次握手：还未完成三次握手的连接放入半连接队列（syns queue），完成的放入全连接队列（accept queue）
+
+<img src="image\image-20220807181056857.png" alt="image-20220807181056857" style="zoom:67%;" />
+
+1. 第一次握手，client发送SYN到server，状态修改为SYN_SEND，server收到，状态改为SYN_REVD，并将该请求放入sync queue队列
+2. 第二次握手，server回复SYN + ACK给client，client收到，状态改变为ESTABLISHED，并发送ACK给server
+3. 第三次握手，server收到ACK，状态改为ESTABLISHED，将该请求从sync queue放入accept queue
+
+
+
+其中
+
+* 在linux2.2前，backlog大小包括了两个队列的大小，在2.2后分别用下面两个参数来控制
+* sync queue - 半连接队列
+  * 大小通过/proc/sys/net/ipv4/tcp_max_syn_backlog指定，在`syncookies`启动的情况下，逻辑上没有最大值限制，这个设置会被忽略
+* accept queue - 全连接队列
+  * 其大小通过/proc/sys/net/core/somaxconn指定，默认为128，在使用listen函数时，内核会根据传入的backlog参数与系统参数，取二者的较小值
+  * 如果accept queue队列满了，server将发送一个拒绝连接的错误信息到client
+
+
+
+netty中可以通过option(ChannelOption.SO_BACKLOG, 值)来设置大小
