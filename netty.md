@@ -1936,6 +1936,8 @@ Netty提供了Http的编解码器handler，`HttpRequestDecoder`和`HttpResponseE
 
 `SimpleChannelInboundHandler<T>`可以指定所处理的消息是什么类（T）的
 
+当使用多个`SimpleChannelInboundHandler`时，会出现ByteBuf被释放多次导致引用计数为0后仍减的报错，因为源码中`SimpleChannelInboundHandler`在使用ByteBuf后会release，所以可以通过构造函数关闭自动释放，或者手动调用byteBuf.retain()使计数器+1
+
 ```java
 public static void main(String[] args) {
     EventLoopGroup boss = new NioEventLoopGroup(1);
@@ -2096,3 +2098,67 @@ Bootstrap bootstrap = new Bootstrap().group(new NioEventLoopGroup)
 
 
 netty中可以通过option(ChannelOption.SO_BACKLOG, 值)来设置大小
+
+
+
+源码默认值大小位置
+
+```java
+public class DefaultServerSocketChannelConfig extends DefaultChannelConfig
+                                              implements ServerSocketChannelConfig {
+
+    private volatile int backlog = NetUtil.SOMAXCONN;
+	...	
+}
+```
+
+
+
+#### 3.3.3 ulimit -n
+
+* 操作系统参数，设置一个进程能打开的最大的文件描述符的数量
+
+
+
+#### 3.3.4 TCP_NODELAY
+
+* 默认为false，开启了Nagle算法，改为true后立即发送
+* 属于SocketChannel参数
+
+
+
+#### 3.3.5 SO_SNDBUF & SO_RCVBUF
+
+发送缓冲区和接收缓存区，决定了滑动窗口的上限，不建议自己调整，建议由操作系统控制
+
+* SO_SNDBUF属于SocketChannel参数
+* SO_RCVBUF既可用于SocketChannel参数，也可用于ServerSocketChannel参数（建议设置到ServerSocketChannel上）
+
+
+
+#### 3.3.6 ALLOCATOR
+
+ByteBuf分配器，ctx.alloc()，影响的相关配置在`ChannelConfig（DefaultChannelConfig）`中
+
+* 属于SocketChannel参数
+
+
+
+#### 3.3.7 RCVBUF_ALLOCATOR
+
+* 属于SocketChannel参数
+* 控制netty接收缓冲区的大小
+* 负责入站数据的分配，决定入站缓冲区的大小（并可动态调整），统一采用direct直接内存，具体池化还是非池化由allocator决定
+
+
+
+### 3.4 writeAndFlush的调试
+
+```java
+ChannelFuture future = channel.writeAndFlush(xxxx).addListener(promise -> {
+   if(!promise.isSuccess()) {
+       Throwable cause = promise.cause();
+       log.error("error", cause);
+   } 
+});
+```
