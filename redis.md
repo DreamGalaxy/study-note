@@ -275,7 +275,7 @@ Redis的Set结构与Java中的HashSet类似，可以看做是一个value为null�
 
 
 
-### SortedSet类型
+### 3.7 SortedSet类型
 
 Redis的SortedSet是一个可排序的set集合，与java中的TreeSet有些类似，但底层数据结构却差别很大。SortedSet中的每一个元素都带有一个score属性，可以基于sorce属性对元素排序，底层的实现是一个跳表（SkipList）加hash表。
 
@@ -302,4 +302,10 @@ SortedSet具备以下特性：
 * ZRANGE key min max：按照score排序后，获取指定排名范围内的元素
 * ZRANGEBYSCORE key min max：按照score排序后，获取指定score范围内的元素
 * ZDIFF、ZINTER、ZUNION：求差集、交集、并集
+
+
+
+## 实战
+
+在使用redis存储对象时，有使用String存储序列化为json字符串的方式，也有使用hash将对象中的每个字段独立存储两种方式；后者可以针对单个字段CRUD，并且内存占用更小。
 
