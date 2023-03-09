@@ -463,3 +463,176 @@ SortedSet具备以下特性：
 | **互斥锁**   | 没有额外的内存消耗<br>保证一致性<br>实现简单 | 线程需要等待，性能受影响<br>可能有死锁风险 |
 | **逻辑过期** | 线程无需等待，性能较好                       | 不保证一致性<br>有额外内存消耗<br>实现复杂 |
 
+
+
+## 9 秒杀业务
+
+### 9.1 全局id
+
+全局id生成器，是一种在分布式系统下用来生成全局唯一ID的工具，一般要满足下列特性：
+
+* 唯一性
+* 高可用
+* 递增性
+* 高性能
+* 安全性
+
+​	
+
+全局id生成策略：
+
+* UUID
+* Redis自增
+* snowflake算法
+
+为了增加ID的安全性，不可以直接使用Redis自增的数值，而是要拼接一些其他信息：
+
+
+
+### 9.2 实现秒杀功能
+
+下单时要判断两点：
+
+* 秒杀是否开始或结束，如果尚未开始或已结束则无法下单
+* 库存是否充足，不足则无法下单
+
+
+
+#### 超卖问题
+
+超卖问题是典型的多线程安全问题，针对这一问题常见的解决方案就是加锁：
+
+* 乐观锁：认为线程安全的问题不一定会发生，因此不加锁，只是在更新数据时去判断有没有其他线程对数据做了修改
+  * 如果没有修改则认为是安全的，自己才更新数据
+  * 如果已被其他线程修改说明发生了安全问题，此时可以重试或异常
+
+判断数据是否被修改过有两种方式：
+
+* 版本号法
+* CAS法（例如在秒杀这个业务中用库存来当版本号，因为该业务不担心发生ABA问题）
+
+
+
+* 悲观锁：认为线程安全问题一定会发生，因此在数据操作之前先获取锁，确保线程串行执行
+  * 例如Synchronized、Lock都是悲观锁
+
+
+
+#### 注意事项：
+
+在单机情况下使用synchronized + @Transactional的时候要注意：
+
+synchronized 锁字符串（例如用户id、交易码等）时，要通过intern()获取常量池中的对象，否则锁的是个新new出来的String对象没有意义。
+
+如果是在@Transactional的方法内部调用synchronized，实际是会先释放锁再去提交事务的，此时仍可能发生线程安全问题，所以需要将sychronized套在事务的方法外层。
+
+
+
+### 9.3 分布式锁
+
+**分布式锁：**满足在分布式系统或集群模式下多进程可见并且互斥的锁。
+
+
+
+分布式锁的实现
+
+|        | MySQL                     | Redis                    | Zookeeper                        |
+| ------ | ------------------------- | ------------------------ | -------------------------------- |
+| 互斥   | 利用mysql本身的互斥锁机制 | 利用setnex这样的互斥命令 | 利用节点的唯一性和有序性实现互斥 |
+| 高可用 | 好                        | 好                       | 好                               |
+| 高性能 | 一般                      | 好                       | 一般                             |
+| 安全性 | 断开连接，自动释放锁      | 利用锁超时时间，到期释放 | 临时结点，断开连接自动释放       |
+
+
+
+#### 基于Redis的分布式锁
+
+获取分布式锁需要实现两个基本方法：
+
+* 获取锁：
+
+  * 互斥：确保只能有一个线程获取锁
+
+  * 阻塞：获取到锁后返回，未获取到时循环等待
+
+  * 非阻塞：尝试一次，成功返回true，失败返回false
+
+    ```shell
+    # 添加锁，NX是互斥，EX是超时时间
+    SET lock thread1 NX EX 10
+    ```
+
+* 释放锁：
+
+  * 手动释放
+
+  * 超时释放：获取锁时添加一个超时时间
+
+    ```shell
+    # 释放锁，删除即可
+    DEL lock
+    ```
+
+
+
+简易的java实现方式（<font color="red">在释放锁时因为查询和删除操作是两步，所以在极端情况下仍会删错</font>）
+
+```java
+@Slf4j
+public class SimpleRedisLock {
+
+    private final String name;
+    private final StringRedisTemplate redisTemplate;
+    private static final String KEY_PREFIX = "lock:";
+    private static final String ID_PREFIX = UUID.randomUUID().toString().replaceAll("-", "") + "-";
+
+    public SimpleRedisLock(String name, StringRedisTemplate redisTemplate) {
+        this.name = name;
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * 非阻塞地获取锁
+     *
+     * @param timeoutSec 锁的超时时间
+     * @return 释放获取到锁
+     */
+    public boolean tryLock(long timeoutSec) {
+        // 获取线程标识作为value，避免线程错误释放其他线程的锁，增加UUID作为前缀是为了避免服务间出现相同的线程id
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        // 获取锁
+        Boolean success = redisTemplate.opsForValue()
+                .setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+        // 避免返回的是null自动拆箱后出现空指针异常
+        return Boolean.TRUE.equals(success);
+    }
+
+    public void unlock() {
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        // 释放锁的时候要检查是不是自己的线程创建的锁，避免误删其他线程创建的锁
+        if ((threadId).equals(redisTemplate.opsForValue().get(KEY_PREFIX + name))) {
+            // 判断和释放锁其实是两步，所以在极端条件下，可能会出现判断完因为gc等情况锁正好超时过期且被重新申请的情况，
+            redisTemplate.delete(KEY_PREFIX + name);
+        }
+    }
+}
+```
+
+使用
+
+```
+SimpleRedisLock lock = new SimpleRedisLock("order:", new StringRedisTemplate());
+try {
+    if (!lock.tryLock(60)) {
+        log.info("获取锁失败");
+    }
+} finally {
+    lock.unlock();
+}
+```
+
+
+
+在线程1因为gc等情况阻塞的时候，锁超时释放，其他线程科能会抢占导致错误删除
+
+![image-20230309155316643](image\image-20230309155316643.png)
