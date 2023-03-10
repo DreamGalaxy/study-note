@@ -586,6 +586,17 @@ public class SimpleRedisLock {
     private static final String KEY_PREFIX = "lock:";
     private static final String ID_PREFIX = UUID.randomUUID().toString().replaceAll("-", "") + "-";
 
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+
+    static {
+        // 可以在启动时加载lua脚本，避免频繁的io操作耗时
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        // ClassPathResource可以在springboot的resources目录下寻找
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
+        // 设置返回值类型
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
+    
     public SimpleRedisLock(String name, StringRedisTemplate redisTemplate) {
         this.name = name;
         this.redisTemplate = redisTemplate;
@@ -607,13 +618,26 @@ public class SimpleRedisLock {
         return Boolean.TRUE.equals(success);
     }
 
+    /**
+     * 查询和删除分两步有问题版本的删除锁
+     */
     public void unlock() {
         String threadId = ID_PREFIX + Thread.currentThread().getId();
         // 释放锁的时候要检查是不是自己的线程创建的锁，避免误删其他线程创建的锁
         if ((threadId).equals(redisTemplate.opsForValue().get(KEY_PREFIX + name))) {
-            // 判断和释放锁其实是两步，所以在极端条件下，可能会出现判断完因为gc等情况锁正好超时过期且被重新申请的情况，
+            // 判断和释放锁其实是两步，不是原子操作，所以在极端条件下，可能会出现判断完因为gc等情况锁正好超时过期且被重新申请的情况，
             redisTemplate.delete(KEY_PREFIX + name);
         }
+    }
+    
+    /**
+     * 使用lua脚本进行原子操作的优化版本删除锁
+     */
+    public void unlockByLua() {
+        // 调用lua脚本
+        redisTemplate.execute(UNLOCK_SCRIPT,
+                Collections.singletonList(KEY_PREFIX + name),
+                ID_PREFIX + Thread.currentThread().getId());
     }
 }
 ```
@@ -636,3 +660,56 @@ try {
 在线程1因为gc等情况阻塞的时候，锁超时释放，其他线程科能会抢占导致错误删除
 
 ![image-20230309155316643](image\image-20230309155316643.png)
+
+
+
+要解决多条命令原子性的问题，需要使用redis的lua脚本
+
+Redis提供了Lua脚本功能，在一个脚本中编写多条Redis命令，确保多条命令执行时的原子性。Lua是一种编程语言。
+
+
+
+分布式锁查询+删除的参考的Lua
+
+```lua
+-- 这里的KEY[1] 就是锁的key，ARGV[1]就是当前线程标识
+-- 获取锁中的标识，判断与当前线程标识是否一致
+if (redis.call('GET', KEY[1]) == ARGV[1]) then
+    -- 一致则删除所锁
+    return redis.call('DEL', KEY[1])
+end
+-- 不一致则直接返回
+return 0
+```
+
+
+
+### 9.4 Redisson
+
+#### 基于Redis分布式锁的优化
+
+存在的问题：
+
+* 不可重入：同一个线程无法多次获取通一把锁
+* 不可重试：获取锁只尝试一次就返回false，没有重试机制
+
+* 超时释放：锁超时释放虽然可以避免死锁，但如果是业务执行耗时较长，也会导致锁释放，存在安全隐患
+* 主从一致性：Redis提供了主从集群，主从同步存在延迟，当主节点宕机时，如果从节点没有同步主中的数据，则会出现锁失效
+
+
+
+Redisson是一个在Redis基础上实现的java驻内存数据网格（In-Memory Data Grid）。它不仅提供了一系列分布式的Java常用对象，还提供了许多分布式服务，其中就包含了各种分布式锁的实现：
+
+* 分布式锁（Lock）和同步器（Synchronized）
+  * 可重入锁（Reentrant Lock）
+  * 公平锁（Fair Lock）
+  * 联锁（MultiLock）
+  * 红锁（RedLock）
+  * 读写锁（ReadWriteLock）
+  * 信号量（Semaphore）
+  * 可过期性信号量（PermitExpirableSemaphore）
+  * 闭锁（CountDownLatch）
+
+
+
+#### Redisson可重入锁原理
