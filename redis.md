@@ -713,3 +713,62 @@ Redisson是一个在Redis基础上实现的java驻内存数据网格（In-Memory
 
 
 #### Redisson可重入锁原理
+
+核心是利用hash结构，同时存储线程标识和重入次数
+
+<img src="image\image-20230313172122808.png" alt="image-20230313172122808" style="zoom:50%;" />
+
+大致lua脚本如下（细节有差异，比如释放删除锁后会publish一个事件通知其他订阅抢锁的线程）：
+
+* 获取锁
+
+```lua
+local key = KEYS[1];  -- 锁的KEY
+local threadId = ARGV[1];  -- 线程唯一标识
+local releaseTime = ARGV[2]; -- 锁的自动释放时间
+-- 判断是否存在，这里没有用hexist
+if(redis.call('exist',key) == 0) then
+    -- 不存在，获取锁
+    redis.call('hset', key, threadId, '1');
+    -- 设置有效期
+    redis.call('expire', key, releaseTime);
+    -- 返回结果
+    return 1;
+end;
+-- 锁已经存在，判断threadId是否是自己的
+if(redis.call('hexist', key, threadId) == 1) then
+    -- 不存在，获取锁，重入次数+1
+    redis.call('hincrby', key, threadId, '1');
+    -- 设置有效期
+    redis.call('expire', key, releaseTime);
+    -- 返回结果
+    return 1;
+end;
+-- 代码走到这里说明锁不是自己的，获取锁失败
+return 0;
+```
+
+* 释放锁
+
+```lua
+local key = KEYS[1];  -- 锁的KEY
+local threadId = ARGV[1];  -- 线程唯一标识
+local releaseTime = ARGV[2]; -- 锁的自动释放时间
+-- 判断当前锁是否被自己持有
+if(redis.call('hexist',key, threadId) == 0) then
+    return nil;
+end;
+-- 是自己的锁，则重入次数-1
+local count = redis.call('hincrby', key ,threadId, -1);
+-- 判断是否重入次数已经为0
+if(count > 0) then
+    -- 大于0说明不能释放锁，重置有效期然后返回
+    redis.call('expire', key, releaseTime);
+    return nil;
+else
+    -- 等于0说明可以释放锁，直接删除
+    redis.call('del', key);
+    return nil;
+end;
+```
+
