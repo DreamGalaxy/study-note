@@ -703,8 +703,8 @@ Redisson是一个在Redis基础上实现的java驻内存数据网格（In-Memory
 * 分布式锁（Lock）和同步器（Synchronized）
   * 可重入锁（Reentrant Lock）
   * 公平锁（Fair Lock）
-  * 联锁（MultiLock）
-  * 红锁（RedLock）
+  * 联锁（MultiLock）（多个可重入锁组成，获取时必须要同时获取到所有节点的锁才可算获取成功）
+  * 红锁（RedLock）（类似联锁，只需要成功获取一半以上节点就算获取成功）
   * 读写锁（ReadWriteLock）
   * 信号量（Semaphore）
   * 可过期性信号量（PermitExpirableSemaphore）
@@ -714,9 +714,11 @@ Redisson是一个在Redis基础上实现的java驻内存数据网格（In-Memory
 
 #### Redisson可重入锁原理
 
-核心是利用hash结构，同时存储线程标识和重入次数
+**可重入**核心是<font color="red">**利用hash结构，同时存储线程标识和重入次数**</font>
 
 <img src="image\image-20230313172122808.png" alt="image-20230313172122808" style="zoom:50%;" />
+
+
 
 大致lua脚本如下（细节有差异，比如释放删除锁后会publish一个事件通知其他订阅抢锁的线程）：
 
@@ -772,3 +774,201 @@ else
 end;
 ```
 
+
+
+**可重试**是<font color="red">**利用信号量和PubSub功能实现等待、唤醒、获取锁失败的重试机制**</font>
+
+
+
+#### Redisson的细节
+
+在抢锁失败的时候，会先计算抢锁花费时间是否超过了等待时间，若超过了会返回，未超过会使用剩余的等待时间去订阅锁的释放事件，若超时了会取消订阅直接返回。后续的剩余时间会循环订阅信号量，直到获取到锁或超时。并且等待使用的是异步的Future方式，对cpu更加友好。
+
+
+
+所有锁的实例都会管理在RedissonLock的类的一个ConcurrentHashMap中
+
+
+
+获取锁成功后且未设置超时时间的续约：会启动一个延时任务**watchDog**，启动延迟为 (锁超时时间 / 3)，默认的锁超时时间为30s，延时任务的内容则是重置锁的超时时间，执行完成后，会**递归调用创建延时任务的方法**。
+
+释放锁时，会从map中取出锁，并取消锁续约的定时任务，并将其从map中移除
+
+<img src="image\image-20230314153538862.png" alt="image-20230314153538862" style="zoom: 50%;" />
+
+
+
+
+
+#### Redisson分布式锁主从一致性问题
+
+redis主从模式同步存在延迟，所以锁可能会失效，解决方法是不使用主从模式，而是多个独立redis节点（内部可以是主从），获取锁时必须要要向每一个redis节点获取到锁才认为是获取到锁（联锁MultiLock），也可以使用红锁RedLock
+
+![image-20230314160120559](image\image-20230314160120559.png)
+
+代码中需要配置多个redis客户端
+
+```java
+RLock lock1 = redissonClient1.getLock("order");
+RLock lock2 = redissonClient2.getLock("order");
+RLock lock3 = redissonClient3.getLock("order");
+
+// 创建联锁，使用任意一个客户端创建即可
+RLock lock = redissionClient1.getMultiLock(lock1, lock2, lock3);
+```
+
+
+
+联锁中的细节：
+
+如果同时设置了等待超时时间和锁超时时间，在申请锁时使用的锁超时时间会是等待超时时间*2，避免锁超时时间过短，在依次申请锁的中途就超时了，最后成功获取后会将超时时间重置为设置的锁超时时间，这样也能使各个锁的剩余时间相差不大
+
+
+
+获取到所有节点的锁才算成功，如果获取失败且设置了重试时间，会释放掉成功获取的锁，重新开始获取（避免死锁）
+
+
+
+### 9.5 基于Redis的消息队列（只是种实现，不推荐使用）
+
+#### 9.5.1 基于List数据结构
+
+通过Redis的List结构（双向链表），结合BLPUSH和BRPOP或者BRPUSH和BLPOP，可以实现阻塞消息队列
+
+这种实现方式相较于JVM内的阻塞队列，优缺点如下：
+
+优点：
+
+* 利用Redis存储，不受限于JVM内存上限
+* 基于Redis的持久化机制，数据安全性有保证
+* 可以满足消息有序性
+
+缺点：
+
+* 无法避免消息丢失
+* 只支持单消费者
+
+
+
+#### 9.5.2 基于PubSub的消息队列
+
+PubSub（发布订阅）是Redis2.0版本引入的消息传递模型。
+
+消费者可以订阅一个或多个channel，生产者向对应channel发送消息后，所有的订阅者都能收到相关消息。
+
+* SUBCRIBE channel [channel]：订阅一个或多个频道
+* PUBLISH channel msg：向一个频道发送消息
+* PSUBSCRIBE pattern [patter]：订阅与pattern格式所匹配的所有频道
+
+优点：
+
+* 采用发布订阅模型，支持多生产者，多消费者
+
+缺点：
+
+* 只有发布时订阅的服务会收到消息，后订阅的无法收到
+
+* 不支持数据持久化
+* <font color="red">无法避免消息丢失</font>
+* 消息堆积有上限，超出时数据丢失
+
+
+
+#### 9.5.3 基于Stream的消息队列
+
+Stream是Redis5.0引入的一种新数据类型，可以实现一个功能非常完善的消息队列
+
+```sh
+XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] *|ID field value [field value ...]
+```
+
+![image-20230316172404707](image\image-20230316172404707.png)
+
+
+
+读取消息的方式之一：XREAD
+
+```shell
+XREAD [COUNT count] [BLOCK milliseconds] [STREAMS key [key ...]] ID [ID ...]
+```
+
+![image-20230316172503502](image\image-20230316172503502.png)
+
+注意：当使用$指定获取最新消息时，如果在处理一条消息的过程中，又有超过1条以上的消息到达消息队列，则下次也只能获取到最新的1条，会出现<font color="red">漏读消息</font>的问题。
+
+
+
+特点：
+
+STREAM类型消息队列的XREAD命令特点：
+
+* 消息可回溯
+* 一个消息可以被多个消费者读取
+* 可以阻塞读取
+* 有消息漏读的风险
+
+
+
+#### 9.5.4 基于Stream的消息队列-消费者组
+
+消费者组（Consumer Group）：将多个消费者划分到一个组中，监听同一个队列。具备以下特点：
+
+* 消息分流：队列中的消息会分流给组内的不同消费者，从而加快消息处理的速度
+
+* 消息标识：消费者会维护一个标识，记录最后一个被处理的消息，哪怕消费者宕机，还会从标识之后读取消息。确保每一个消息都会被消费。
+
+* 消息确认：消费者获取到消息后，消息出于一个pending状态，并存入一个pending-list。当处理完成需要通过XACK来确认消息，标记消息为已处理，才会从pending-list移除。
+
+
+
+消费者组相关命令
+
+```shell
+XGROUP CREATE key groupname ID [MKSTREAM]
+```
+
+* key：队列名称
+* groupName：消费者组名称
+* ID：起始ID标识，$代表队列中的最后一个消息，0代表队列中的第一个消息
+* MKSTREAM：队列不存在时自动创建队列
+
+其他常见命令：
+
+```shell
+# 删除指定消费者组
+XGROUP DESTORY key groupname
+
+# 给指定消费者组添加消费者
+XGROUP CREATECONSUMER key groupname consumername
+
+# 删除消费者组中的指定消费者
+XGROUP DELCONSUMER key groupname consumername
+```
+
+
+
+从消费者组读取消息：
+
+```shell
+XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] ID [ID ...]
+```
+
+* group：消费者组名称
+* consumer：消费者名称，如果消费者不存在，会自动创建一个消费者
+* count：本次查询的最大数量
+* BLOCK milliseconds：当没有消息时的最长等待时间
+* NOACK：无需手动ACK，获取到消息后自动确认
+* STREAMS key：指定队列名称
+* ID：获取消息的起始ID：
+  * ">"：从下一个未消费的消息开始
+  * 其他：根据指定id从pending-list中获取已消费但未确认的消息，例如0，是从pending-list中的第一个消息开始
+
+
+
+STRAM类型消息队列的XREADGROUP命令特点：
+
+* 消息可回溯
+* 可以多消费者争抢消息，加快消费速度
+* 可以阻塞读取
+* 没有消息漏读的风险
+* 有消息确认机制，保证消息至少被消费一次
