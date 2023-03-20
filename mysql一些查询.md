@@ -28,3 +28,17 @@ show variables like '%autoinc%';
 ```
 
 参考文章：https://blog.51cto.com/fengfeng688/2141772
+
+
+
+对于in查询，查询结果并不是按照in传入的顺序排序，而是按照在数据库中的顺序排序，如果希望按照in传入的顺序排序，需要在sql中加上order by  field(字段, 自定义的值1，值2，值3...)
+
+例如查询用户按照所给id顺序查出
+
+```sql
+SELECT id,phone,name
+FROM t_user
+Where id in (5,1)
+ORDER BY FIELD(id, 5, 1);
+```
+
