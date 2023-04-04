@@ -972,3 +972,185 @@ STRAM类型消息队列的XREADGROUP命令特点：
 * 可以阻塞读取
 * 没有消息漏读的风险
 * 有消息确认机制，保证消息至少被消费一次
+
+
+
+### 9.6 用户签到表
+
+可以使用BitMap数据结构来存储用户每个月的签到记录，每1位代表一天的签到情况
+
+Redis中是利用String类型数据结构实现BitMap的，因此最大上限是512MB，转换为bit则是2^32个bit位。
+
+BitMap基本操作：
+
+SETBIT：向指定位置（offset）存入一个0或1
+
+GETBIT：获取指定位置（offset）的bit值
+
+BITCOUNT：统计BitMap中值为1的bit位的数量
+
+BITFIELD：操作（查询、修改、自增）BitMap中bit数组中的指定位置（offset）的值
+
+BITFIELD_RO：获取BitMap中bit数组，并以十进制形式返回
+
+BITOP：将多个BitMap的结果做位运算（与、或、异或）
+
+BITPOS：查找bit数组中指定范围内第一个0或1出现的位置
+
+
+
+### 9.7 页面UV统计
+
+UV：全称Unique Visitor，也叫独立访客量，是指通过互联网访问、浏览这个网页的自然人。1天内一个用户多次访问该网站，只记录1次。
+
+
+
+如果网站访问量极大，将用户信息缓存至redis，内存一定是不够用的，可以使用HyperLogLog数据结构
+
+HyperLogLog（HLL）是从LogLog算法派生的概率算法，用于确定非常大的集合的基数，而不需要存储其所有值。相关算法原理可以参考：https://juejin.cn/post/6844903785744056333
+
+
+
+Redis中HLL是基于String结构实现的，单个HLL的内存永远小于16KB，内存占用极低，但测量结果存在小于0.81%的误差，不过对于极大访问量的UV统计来说，这个误差可以忽略。
+
+HLL基本操作：
+
+PFADD：添加统计对象，例如用户id
+
+PFCOUNT：获得近似的统计基数
+
+PFMERGE：合并多个不同的HLL结果为一个
+
+
+
+# 分布式缓存-Redis集群
+
+单点Redis的问题及分布式解决方案：
+
+* 数据丢失问题：实现Redis数据持久化
+* 并发能力问题：搭建主从集群，实现读写分离
+* 故障恢复问题：搭建分片集群，利用插槽机制实现动态扩容
+* 存储能力问题：利用Redis哨兵，实现健康检查和自动恢复
+
+
+
+## 1. Redis持久化
+
+### 1.1 RDB
+
+RDB全称Redis Database Backup file（Redis数据备份文件），也被叫做Redis数据快照。简单来说就是把内存中的所有数据都记录到磁盘中。当Redis实现故障重启后，从磁盘读取快照文件，恢复数据。
+
+快照文件称为RDB文件，默认是保存在当前运行目录。
+
+手动持久化命令：
+
+```shell
+redis-cli
+save #由Redis的主进程来执行RDB，会阻塞所有命令
+bgsave #开启子进程执行RDB，避免主进程受到影响
+```
+
+Redis正常停机时会执行一次RDB
+
+
+
+#### 1.1.1 配置
+
+Redis内部有触发RDB的机制，可以在redis.conf文件中找到，格式如下：
+
+```shell
+# 900秒内，如果有至少1个key被修改，则执行bgsave，如果是save ""则表示禁用RDB
+save 900 1
+save 300 10
+save 60 10000
+```
+
+RDB的其他配置也可以在redis.conf中设置：
+
+```shell
+# 是否压缩，建议不开启，压缩也会消耗cpu，cpu资源紧张时不推荐压缩
+rdbcompression yes
+
+# RDB文件名称
+dbfilename dump.rdb
+
+# 文件保存的路径目录
+dir ./
+```
+
+
+
+#### 1.1.2 bgsave原理
+
+bgsave开始时会fork主进程得到子进程，子进程共享主进程的内存数据。完成fork后读取内存数据并写入RDB文件。
+
+fork采用的是copy-on-write技术：
+
+* 当主进程执行读操作时，访问共享内存；
+* 当主进程执行写操作时，则会拷贝一份数据，执行写操作。
+  * 优点是可以使子进程不需要阻塞主进程拷贝页表即可快速开始持久化
+  * 缺点是如果拷贝过程中大量的数据被替换，则会占用大量额外内存，当数据全部被替换时则占用双倍
+
+![image-20230404173714722](image\image-20230404173714722.png)
+
+
+
+#### 1.1.3 缺点
+
+RDB执行间隔时间长，两次RDB之间写入数据有丢失的风险
+
+fork子进程、压缩、写出RDB文件都比较耗时
+
+
+
+### 1.2 AOF
+
+AOF全称为Append Only File（追加文件）。Redis处理的每一个写命令都会记录在AOF文件，可以看做是命令日志文件。
+
+#### 1.2.1 配置
+
+AOF默认是关闭的，需要修改redis.conf配置文件来开启AOF，同时注意通过save ""关掉RDB
+
+```shell
+# 是否开启AOF功能，默认是no
+appendonly yes
+# AOF文件的名称
+appendfilename "appendonly.aof"
+```
+
+AOF命令记录的频率也可以通过redis.conf文件配置:
+
+```shell
+# 表示每执行一次写命令，立即记录到AOF文件
+appendfsync always
+# 写命令执行完先放入AOF缓冲区，然后表示每隔1秒将缓冲区数据写入到AOF文件，是默认方案
+appendfsync everysec
+# 写命令执行完先放入AOF缓冲区，由操作系统决定何时将缓冲区内容写回磁盘
+appendfsync no
+```
+
+比较
+
+| 配置项   | 刷盘时机     | 优点                   | 缺点                         |
+| -------- | ------------ | ---------------------- | ---------------------------- |
+| always   | 同步刷盘     | 可靠性高，几乎不丢数据 | 性能影响大                   |
+| everysec | 每秒刷盘     | 性能适中               | 最多丢失1秒数据              |
+| no       | 操作系统控制 | 性能良好               | 可靠性差，可能会丢失大量数据 |
+
+
+
+#### 1.2.2 AOF的压缩
+
+因为是记录命令，AOF文件会比RDB文件大得多。而且AOF会记录对同一个key的多次写操作，但只有最后一次写操作才有意义。通过执行bgrewriteaof命令，可以让AOF文件执行重写功能，用最少的命令达到相同的效果。
+
+
+
+redis也会在达到阈值的时候自动去重写AOF文件。阈值也可以在redis.conf中配置：
+
+```shell
+# AOF文件比上次文件增长超过多少百分比则触发重写
+auto-aof-rewrite-percentage 100
+# AOF文件体积最小多大以上才触发重写
+auto-aof-rewrite-min-size 64mb
+```
+
