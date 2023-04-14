@@ -1570,8 +1570,8 @@ private static void log(ByteBuf buffer) {
     int rows = length / 16 + (length % 15 == 0 ? 0 : 1) + 4;
     StringBuilder buf = new StringBuilder(rows * 80 * 2)
             .append("read index:").append(buffer.readerIndex())
-            .append(" write index:").append(buffer.writerIndex())
-            .append(" capacity:").append(buffer.capacity())
+            .append("write index:").append(buffer.writerIndex())
+            .append("capacity:").append(buffer.capacity())
             .append(NEWLINE);
     ByteBufUtil.appendPrettyHexDump(buf, buffer);
     System.out.println(buf.toString());
@@ -1697,7 +1697,7 @@ bytebuf.resetReaderIndex();
 
 
 
-回收你吃的源码实现，需要关注下面方法的不同实现
+回收内存的源码实现，需要关注下面方法的不同实现
 
 ```java
 protected abstract void deallocated();
