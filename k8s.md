@@ -567,3 +567,229 @@ Ingress：Service的统一网关入口，将流量负载均衡到各个Service�
 
 
 ### 8、存储抽象
+
+#### 8.1 PV & PVC概念
+
+> 静态供应
+
+PV：持久卷（Persistent Volume），将应用需要持久化的数据保存到指定位置
+
+PVC：持久卷声明（Persistent Volume Claim），声明需要使用的持久卷规格
+
+
+
+#### 8.2 创建pv池
+
+```shell
+# 创建nfs主节点
+mkdir -p /nfs/data/01
+mkdir -p /nfs/data/02
+mkdir -p /nfs/data/03
+```
+
+
+
+创建PV
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+    name: pv01-10m
+spec:
+	capacity:
+		storage: 10M
+	accessModes:
+		- ReadwriteMany
+	storageClassName: nfs
+	nfs:
+		path: /nfs/data/01
+		server: 11.22.33.44
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+    name: pv02-1Gi
+spec:
+	capacity:
+		storage: 1Gi
+	accessModes:
+		- ReadwriteMany
+	storageClassName: nfs
+	nfs:
+		path: /nfs/data/02
+		server: 11.22.33.55
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+    name: pv03-3Gi
+spec:
+	capacity:
+		storage: 3Gi
+	accessModes:
+		- ReadwriteMany
+	storageClassName: nfs
+	nfs:
+		path: /nfs/data/03
+		server: 11.22.33.66
+```
+
+
+
+#### 8.3  创建PVC
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+    name: pv03-3Gi
+spec:
+	capacity:
+		storage: 3Gi
+	accessModes:
+		- ReadwriteMany
+	# 需要与申请PV时一致
+	storageClassName: nfs
+	resources: 
+		requests:
+			storage: 200Mi
+```
+
+
+
+#### 8.4 创建Pod绑定PVC
+
+```yaml
+apiVersion: v1
+kind: Deployment
+metadata:
+	labels: 
+		app: nginx-deploy-pvc
+    name: nginx-deploy-pvc
+spec:
+	replica: 2
+	selector:
+		matchLabels:
+			app: nginx-deploy-pvc
+	template:
+		metadata:
+			labels:
+				app: nginx-deploy-pvc
+	spec:
+		containers:
+		- image: nginx
+		  name: nginx
+		  volumeMounts:
+		  - name: html
+		    mountPath: /usr/share/nginx/html
+		volumes:
+		- name: html
+		  persistentVolumeClaim
+		  	# 和申请的PVC绑定
+		  	claimName: nginx-pvc
+```
+
+
+
+### 9、ConfigMap
+
+> 抽取应用配置并可以自动更新
+
+命令中configmap可以简写为cm
+
+#### 9.1 创建配置集
+
+```shell
+# 创建配置，redis保存到k8s的etcd：
+kubectl create cm redis-conf --from-file=redis.conf
+```
+
+
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: redis-conf
+    namespace: default
+# data是所有真正的数据，key是文件名，value是配置文件中的内容，yaml的|可以保留后续字符串中的换行符
+data:
+	redis.conf: |
+		appendonly yes
+```
+
+
+
+#### 9.2 创建Pod
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+	name: redis
+spec:
+	containers:
+	- image: redis
+	  name: redis
+      command:
+      - redis-server
+      # 指的是redis容器内部的位置
+      - "/redis-master/redis.conf"
+      ports:
+      - containerPort: 6379
+      volumeMounts:
+      - mountPath: /data
+        name: data
+      - mountPath: /redis-master
+        # 指下面volumes中name为config的卷
+        name: config
+	volumes:
+	- name: data
+	  emptyDir: {}
+	- name: config
+	  configMap:
+	    # 这是指创建的配置集中的同名配置
+	  	name: redis-conf
+	  	items:
+	  	- key: redis.conf
+	  	  path: redis.conf
+```
+
+
+
+### 10、Secret
+
+Secret对象类型用来保存敏感信息，例如密码，OAuth令牌和SSH密钥。将这些信息放在Secret中比放在Pod的定义或者容器镜像中来说更加安全和灵活。
+
+
+
+#### 10.1 创建Secret
+
+```shell
+# 私有仓库密钥配置
+kubectl create secret docker-registry regcred \
+	--docker-server=<镜像仓库服务器> \
+	--docker-username=<用户名> \
+	--docker-password=<密码> \
+	--docker-email=<邮箱>
+```
+
+
+
+#### 10.2 使用Secret
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+	name: private-nginx
+spec:
+	containers:
+	- name: private-nginx
+	  image: 镜像名
+    imagePullSecrets:
+    # 与上面创建的密钥配置一致
+    - name: regcred
+```
+
