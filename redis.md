@@ -2,9 +2,9 @@
 
 非关系型数据库NoSQL（Not Only SQL）的一种 ，内存存储，并且不记录关系，是关系型数据库的一种补充，MongoDB、HBase都是NoSQL， MongoDB适合记录文档信息，图片信息则适合用分布式系统文件如FastDFS集群存储，搜索关键字适合用ES、solr、Lucene等存储。
 
-## 1 启动
+## 1、启动
 
-### 1.1 默认启动
+### 1.1、默认启动
 
 ```shell
 redis-server
@@ -14,7 +14,7 @@ redis-server
 
 
 
-### 1.2 后台启动
+### 1.2、后台启动
 
 需要修改redis.conf文件：
 
@@ -50,7 +50,7 @@ redis-server redis.conf
 
 
 
-## 2 Redis-cli基本操作
+## 2、Redis-cli基本操作
 
 使用方式如下：
 
@@ -72,7 +72,7 @@ redis-cli [options] [commands]
 
 
 
-### 2.1 信息添加
+### 2.1、信息添加
 
 * 功能：设置key，value数据
 
@@ -83,7 +83,7 @@ set key value
 eg: set name test
 ```
 
-### 2.2 信息查询
+### 2.2、信息查询
 
 * 功能：根据key查询对应的value，如果不存在，则返回空（nil）
 
@@ -94,7 +94,7 @@ get key
 eg: get name
 ```
 
-### 2.3 清屏
+### 2.3、清屏
 
 * 功能：清除屏幕中的信息
 
@@ -104,7 +104,7 @@ eg: get name
 clear
 ```
 
-### 2.4 退出
+### 2.4、退出
 
 ```
 quit
@@ -114,7 +114,7 @@ exit
 
 
 
-## 3 Redis数据结构及使用方式
+## 3、Redis数据结构及使用方式
 
 5种基本类型：String、Hash、List、Set、SortedSet
 
@@ -122,7 +122,7 @@ exit
 
 
 
-### 3.1 通用命令
+### 3.1、通用命令
 
 通过`help @generic`可以查看所有通用命令
 
@@ -153,7 +153,7 @@ DEL k1 k2 k3 k4
 
 
 
-### 3.2 key的结构
+### 3.2、key的结构
 
 redis的key允许有多个单词形成的层级结构，多个单词之间用':'隔开，例如：
 
@@ -165,7 +165,7 @@ projct:product:1
 
 
 
-### 3.3 String类型
+### 3.3、String类型
 
 String类型，也就是字符串类型，是redis中最简单的存储类型。
 
@@ -201,7 +201,7 @@ String类型，也就是字符串类型，是redis中最简单的存储类型。
 
 
 
-### 3.4 Hash类型
+### 3.4、Hash类型
 
 Hash类型，也叫散列类型，其value是一个无序字典，类似java中的HashMap
 
@@ -221,7 +221,7 @@ Hash类型，也叫散列类型，其value是一个无序字典，类似java中�
 
 
 
-### 3.5 List类型
+### 3.5、List类型
 
 Redis中的List类型与java中的LinkedList类似，可以看做是一个双向链表结构。既可以支持正向检索也可以支持反向检索。
 
@@ -247,7 +247,7 @@ Redis中的List类型与java中的LinkedList类似，可以看做是一个双向
 
 
 
-### 3.6 Set类型
+### 3.6、Set类型
 
 Redis的Set结构与Java中的HashSet类似，可以看做是一个value为null的HashMap（HashSet的value实际是同一个object对象）。因为也是一个hash表，因此具备与HashSet类似的特征：
 
@@ -275,7 +275,7 @@ Redis的Set结构与Java中的HashSet类似，可以看做是一个value为null�
 
 
 
-### 3.7 SortedSet类型
+### 3.7、SortedSet类型
 
 Redis的SortedSet是一个可排序的set集合，与java中的TreeSet有些类似，但底层数据结构却差别很大。SortedSet中的每一个元素都带有一个score属性，可以基于sorce属性对元素排序，底层的实现是一个跳表（SkipList）加hash表。
 
@@ -305,13 +305,13 @@ SortedSet具备以下特性：
 
 
 
-## 4. 数据结构的选择
+## 4、数据结构的选择
 
 在使用redis存储对象时，有使用String存储序列化为json字符串的方式，也有使用hash将对象中的每个字段独立存储两种方式；后者可以针对单个字段CRUD，并且内存占用更小。
 
 
 
-## 5. 缓存更新策略
+## 5、缓存更新策略
 
 |          | 内存淘汰                                                     | 超时剔除                                                     | 主动更新                                     |
 | -------- | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------- |
@@ -326,7 +326,7 @@ SortedSet具备以下特性：
 
 
 
-### 5.1 主动更新策略
+### 5.1、主动更新策略
 
 #### 1. cache aside pattern（推荐）
 
@@ -342,7 +342,7 @@ SortedSet具备以下特性：
 
 
 
-### 5.2 最佳实践方案
+### 5.2、最佳实践方案
 
 1. 低一致性需求：使用redis自带的内存淘汰机制
 2. 高一致性需求：主动更新，并以超时剔除作为兜底方案
@@ -355,7 +355,7 @@ SortedSet具备以下特性：
 
 
 
-### 5.3 操作缓存和数据库需要考虑的问题：
+### 5.3、操作缓存和数据库需要考虑的问题：
 
 1. 删除还是更新缓存：
    * 更新缓存：每次更新数据库都更新缓存，**无效写操作较多**
@@ -383,7 +383,7 @@ SortedSet具备以下特性：
 
 
 
-## 6 缓存穿透
+## 6、缓存穿透
 
 **缓存穿透**是指客户端请求的数据在缓存和数据库中都不存在，这样缓存永远不会生效，这些请求都会打到数据库。比如用户随意编写不存在的id进行网络攻击。
 
@@ -413,7 +413,7 @@ SortedSet具备以下特性：
 
 
 
-## 7 缓存雪崩
+## 7、缓存雪崩
 
 **缓存雪崩**是指在同一时间段大量的缓存key同时失效或者redis服务宕机，导致大量的请求到达数据库，带来巨大的压力。
 
@@ -430,7 +430,7 @@ SortedSet具备以下特性：
 
 
 
-## 8 缓存击穿
+## 8、缓存击穿
 
 **缓存击穿**问题也叫**热点key问题**，就是一个**被高并发访问**并且**缓存重建较复杂**的key突然失效了，无数的请求访问会在瞬间给数据库带来巨大的冲击。
 
@@ -463,9 +463,9 @@ SortedSet具备以下特性：
 
 
 
-## 9 秒杀业务
+## 9、秒杀业务
 
-### 9.1 全局id
+### 9.1、全局id
 
 全局id生成器，是一种在分布式系统下用来生成全局唯一ID的工具，一般要满足下列特性：
 
@@ -487,7 +487,7 @@ SortedSet具备以下特性：
 
 
 
-### 9.2 实现秒杀功能
+### 9.2、实现秒杀功能
 
 下单时要判断两点：
 
@@ -526,7 +526,7 @@ synchronized 锁字符串（例如用户id、交易码等）时，要通过inter
 
 
 
-### 9.3 分布式锁
+### 9.3、分布式锁
 
 **分布式锁：**满足在分布式系统或集群模式下多进程可见并且互斥的锁。
 
@@ -682,7 +682,7 @@ return 0
 
 
 
-### 9.4 Redisson
+### 9.4、Redisson
 
 #### 基于Redis分布式锁的优化
 
@@ -827,7 +827,7 @@ RLock lock = redissionClient1.getMultiLock(lock1, lock2, lock3);
 
 
 
-### 9.5 基于Redis的消息队列（只是种实现，不推荐使用）
+### 9.5、基于Redis的消息队列（只是种实现，不推荐使用）
 
 #### 9.5.1 基于List数据结构
 
@@ -973,9 +973,9 @@ STRAM类型消息队列的XREADGROUP命令特点：
 
 
 
-## 10 用户点赞
+## 10、用户点赞
 
-### 10.1 普通点赞
+### 10.1、普通点赞
 
 因为对于同一篇博客，一个用户最多点赞1次，同时为了在集合中区分用户，**可以使用Set数据结构**：以该博客的id+部分字符串为key，用户id的集合为value。
 
@@ -983,7 +983,7 @@ STRAM类型消息队列的XREADGROUP命令特点：
 
 
 
-### 10.2 点赞同时记录点赞顺序
+### 10.2、点赞同时记录点赞顺序
 
 对于类似朋友圈点赞记录顺序的情况，**可以使用SortedSet数据结构**，以时间戳为score，其余和普通点赞相同。
 
@@ -993,15 +993,15 @@ STRAM类型消息队列的XREADGROUP命令特点：
 
 
 
-## 11 好友关注
+## 11、好友关注
 
-### 11.1 共同关注
+### 11.1、共同关注
 
 可以从数据库中分别查出两人的关注列表，存入set集合中（也可以从业务层面直接将关注列表存在redis的set集合中），再通过`SINTER`求集合的交集。
 
 
 
-### 11.2 关注推送
+### 11.2、关注推送
 
 关注推送也叫做Feed流，直译为投喂，为用户提供“沉浸式”的体验，通过无限下拉刷新获取新的信息。
 
@@ -1030,7 +1030,7 @@ Timeline的实现方案有三种：
 
 <img src="image\image-20230412113731652.png" alt="image-20230412113731652" style="zoom: 50%;" />
 
-## 11 用户签到表
+## 11、用户签到表
 
 **可以使用BitMap数据结构**来存储用户每个月的签到记录，每1位代表一天的签到情况
 
@@ -1054,7 +1054,7 @@ BITPOS：查找bit数组中指定范围内第一个0或1出现的位置
 
 
 
-## 12 页面UV统计
+## 12、页面UV统计
 
 UV：全称Unique Visitor，也叫独立访客量，是指通过互联网访问、浏览这个网页的自然人。1天内一个用户多次访问该网站，只记录1次。
 
@@ -1089,9 +1089,9 @@ PFMERGE：合并多个不同的HLL结果为一个
 
 
 
-## 1. Redis持久化
+## 1、Redis持久化
 
-### 1.1 RDB
+### 1.1、RDB
 
 RDB全称Redis Database Backup file（Redis数据备份文件），也被叫做Redis数据快照。简单来说就是把内存中的所有数据都记录到磁盘中。当Redis实现故障重启后，从磁盘读取快照文件，恢复数据。
 
@@ -1158,7 +1158,7 @@ fork子进程、压缩、写出RDB文件都比较耗时
 
 
 
-### 1.2 AOF
+### 1.2、AOF
 
 AOF全称为Append Only File（追加文件）。Redis处理的每一个写命令都会记录在AOF文件，可以看做是命令日志文件。
 
@@ -1227,13 +1227,13 @@ auto-aof-rewrite-min-size 64mb
 
 
 
-## 2. Redis主从
+## 2、Redis主从
 
 单节点Redis的并发能力是有上限的，要进一步提高Redis的并发能力，就需要搭建主从集群，实现读写分离。
 
 
 
-### 2.1 配置
+### 2.1、配置
 
 配置有临时和永久两种模式：
 
@@ -1249,7 +1249,7 @@ salveof <masterip> <masterport>
 
 
 
-### 2.2 数据同步原理
+### 2.2、数据同步原理
 
 主从第一次同步是<font color="red">全量同步</font>，但如果salve重启后同步，则执行<font color="red">增量同步</font>
 
@@ -1274,9 +1274,138 @@ repl_baklog大小有上限，写满后会覆盖最早的数据。如果salve断�
 
 
 
-### 2.3 数据同步优化
+### 2.3、数据同步优化
 
 * 在master中配置repl-dickless-sync yes 启用无磁盘复制，避免全量同步时的磁盘IO。（适用于磁盘较慢但网络较快的场景）
 * Redis单节点上的内存占用不要太大，减少RDB导致的过多磁盘IO。
 * 适当提高repl_backlog的大小，发现salve宕机时尽快实现故障恢复，尽可能避免全量同步
 * 限制一个master上的salve节点数量，如果有太多salve，可以采用主-从-从链式结构，减少master压力
+
+
+
+## 3、Redis哨兵
+
+### 3.1、哨兵的作用和原理
+
+Redis提供了哨兵（Sentinel）机制来实现主从集群的自动故障恢复。哨兵的结构和作用如下：
+
+* **监控：**Sentinel会不断地检查master和salve是否按预期工作
+* **自动故障恢复：**如果master故障，Sentinel会将一个slave提升为master。当故障实例恢复后也以新的master为主
+* **通知：**Sentinel充当Redis客户端的服务发现来源，当集群发生故障转移时，会将最新信息推送给Redis的客户端
+
+<img src="image\image-20230531113851056.png" alt="image-20230531113851056" style="zoom:50%;" />
+
+
+
+#### 服务状态监控
+
+Sentinel基于心跳机制监测服务状态，每隔1秒向集群的每个实例发送ping命令：
+
+* 主观下线：如果某sentinel节点发现某实例未在规定时间响应，则应认为该实例**主观下线**
+* 客观下线：若超过指定数量（quorum）的sentinel都认为该实例主观下线，则该实例**客观下线**。quorum值最好超过sentinel实例数量的一半
+
+
+
+#### 选举新的master
+
+一旦发现master故障，sentinel需要在salve中选择一个作为新的master，选择依据是这样的：
+
+* 首先会判断slave节点与master节点断开时间长短，如果超过指定值（down-after-milliseconds * 10）则会排除该slave节点
+* 然后判断slave节点的slave-priority，值越小优先级越高，如果是0则永不参与选举
+* 如果salve-priority一样，则判断slave节点的offset值，越大说明数据越新，优先级越高
+* 最后是判断slave节点的运行id大小，越小优先级越高
+
+
+
+#### 实现故障转移
+
+当选了其中一个slave为新的master后，故障的转移步骤如下：
+
+* sentinel给备选的slave节点发送slave of no one命令，让该节点成为master
+* sentinel给所有其他slave发送`salveof ip 端口`命令，让这些slave成为新的master的从节点，开始从新的master上同步数据
+* 最后，sentinel将故障节点标记为slave，当故障节点恢复后会自动成为新的master的slave节点
+
+
+
+### 3.2、RedisTemplate的哨兵模式
+
+配置主从读写分离
+
+```java
+@Bean
+public LettuceClientConfigurationBuilderCustomizer configurationBuilderCustomizer(){
+    return configBuilder -> configBuilder.readFrom(ReadFrom.REPLICA_PREFERRED);
+}
+```
+
+ReadFrom是配置Redis的读取策略，是一个枚举，包括下面的选项：
+
+* MASTER：从主节点读取
+* MASTER_PREFERRED：优先从主节点读取，master不可用才读取replica
+* REPLICA：从slave（replica）节点读取
+* REPLICA_PREFERRED：优先从slave（replica）节点读取，所有的slave都不用才读取master
+
+
+
+当master节点故障时，lettuce会自动订阅到最新的master节点
+
+
+
+## 4、Redis分片集群
+
+主从和哨兵可以解决高可用、高并发读的问题。但是依然有两个问题没有解决：
+
+* 海量数据存储问题
+* 高并发写的问题
+
+使用分片集群可以解决上述问题，分片集群特征：
+
+* 集群中有多个master，每个master保存不同数据
+* 每个master都可以有多个slave节点
+* master之间通过ping互相检测彼此健康状态
+* 客户端请求可以访问集群任意节点，最终都会被转发到正确节点
+
+
+
+
+
+<img src="image\image-20230531153020064.png" alt="image-20230531153020064" style="zoom:50%;" />
+
+
+
+### 4.1、散列插槽
+
+Redis会把每一个master节点映射到0~16383共16384个插槽（hash slot）上，查看集群信息时就能看到
+
+数据key不是与节点绑定，而是与插槽绑定（当节点数量变化时，每个节点负责的插槽也会变）。redis会根据key的有效部分计算插槽值，分两种情况：
+
+* key中包含“{}”，且“{}”中至少包含1个字符，“{}”中的部分是有效部分
+* key中不包含“{}”，整个key都是有效部分
+
+例如：key是num，那么就根据num计算，如果是{test}num，则根据test计算。计算方式是利用CRC16算法得到一个hash值，然后对16384取余，得到的结果就是slot值。
+
+
+
+如果需要将某一类数据保存在同一个redis实例中，可以让这一类数据都使用相同的有效部分，例如key都以{typeId}为前缀
+
+
+
+### 4.2、故障转移
+
+当某个实例与其他实例失去连接后，会被判断疑似宕机，当确定服务下线后，会自动从该集群中提升一个slave为新的master
+
+
+
+### 4.3、数据迁移
+
+利用cluster failover命令可以手动让集群中的某个master宕机，切换到执行cluster failover命令的这个slave节点，实现无感知的数据迁移
+
+手动的failover支持三种不同模式：
+
+* 缺省：默认的流程，如图1~6步
+
+* force：省略了对offset的一致性校验
+
+* takeover：直接执行第5步，忽略数据一致性、忽略master状态和其他master的意见
+
+<img src="image\image-20230531162205498.png" alt="image-20230531162205498" style="zoom:50%;" />
