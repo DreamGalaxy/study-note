@@ -1409,3 +1409,122 @@ Redis会把每一个master节点映射到0~16383共16384个插槽（hash slot）
 * takeover：直接执行第5步，忽略数据一致性、忽略master状态和其他master的意见
 
 <img src="image\image-20230531162205498.png" alt="image-20230531162205498" style="zoom:50%;" />
+
+
+
+# Redis最佳实践
+
+## 1、Redis键值设计
+
+### 1.1、优雅的key结构
+
+Redis的key最好遵循以下约定：
+
+* 遵循基本格式：[][][业务名称]:[数据名]:[id]
+* 长度不超过44字节
+* 不包含特殊字符
+
+例如登陆用户的key可以是login:user:10
+
+
+
+优点：
+
+1. 可读性强
+
+2. 避免key冲突
+
+3. 方便管理
+
+4. 更节省内存：key是string类型，底层编码包含int、embstr和raw三种。embstr在小于44字节（低于4.0版本是39字节）时使用，采用连续内存空间，内存占用更小
+
+   ```shell
+   # 通过如下命令可以查看key类型
+   object encoding key
+   ```
+
+   
+
+### 1.2、避免BigKey
+
+BigKey通常以Key的大小和Key中的成员的数量来综合判定，例如：
+
+* Key本身的数据量过大：一个String类型的Key，它的值为5MB
+* Key中的成员数量过多：一个ZSET类型的Key，它的成员数量为10000个
+* Key中成员的数据量过大：一个Hash类型的Key，它的成员数量虽然只有1000个，但这些成员的Value总大小为100MB
+
+
+
+推荐值：
+
+* 单个Key的value小于10KB
+* 对于集合类型的Key，建议元素数量小于1000
+
+
+
+```shell
+# 通过如下命令可以查看key的大小，但比较耗费cpu
+MEMORY USAGE KEY
+# 查看string类型value的长度
+STRLEN KEY
+```
+
+
+
+#### BigKey的危害
+
+* 网络阻塞
+
+  对BigKey执行读请求，少量的QPS就可能导致带宽使用率被占满，导致Redis实例，乃至所在物理机变慢
+
+* 数据倾斜
+
+  BigKey所在的Redis实例内存使用率远超其他实例，无法使数据分片的内存资源达到平衡
+
+* Redis阻塞
+
+  对元素较多的hash、list、zset等做运算会耗时较久，使主线程被阻塞
+
+* CPU压力
+
+  对BigKey的数据序列化和反序列化会导致CPU的使用率飙升，影响Redis实例和本机其他应用
+
+
+
+#### 发现BigKey
+
+* redis-cli --bigkeys
+
+  利用redis-cli提供的 --bigkeys参数，可以遍历分析所有key，并返回Key的整体统计信息与每个数据的Top1的big key
+
+* scan扫描
+
+  自己编程，利用scan命令扫描Redis中的所有key，利用strlen、hlen等命令判断key的长度（不建议使用MEMORY USAGE）
+
+  SCAN命令扫描全部，HSCAN扫描Hash，SSCAN扫描Set，ZSCAN扫描Sorted Set
+
+* 第三方工具
+
+  利用第三方工具，如Redis-Rdb-Tools分析RDB快照文件，全面分析内存使用情况
+
+* 网络监控
+
+  自定义工具，监控进出Redis的网络数据，超出预警值时主动告警
+
+
+
+#### 删除BigKey
+
+BigKey占用内存较多，即便删除这样的key也要耗费很长时间，导致Redis主线程阻塞，引发一系列问题
+
+* redis3.0版本以下
+
+  如果是集合类型，则遍历BigKey的元素，先逐个删除子元素，最后删除BigKey
+
+* redis4.0版本以后
+
+  Redis在4.0版本以后提供了异步删除命令：unlink
+
+
+
+### 1.3、恰当的数据结构
