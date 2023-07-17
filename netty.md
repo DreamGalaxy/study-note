@@ -161,7 +161,7 @@ compact()是吧未读取完的部分向前压缩，然后切换至写模式
 ```java
 // java堆内存，读写效率较低，受到GC影响 java.nio.HeapByteBuffer
 ByteBuffer buf = ByteBuffer.allocate(16);
-// 直接内存，读写效率较高（少一次拷贝），不会收GC影响，分配的效率低 java.nio.DirectByteBuffer
+// 直接内存，读写效率较高（少一次拷贝），不会受GC影响，分配的效率低 java.nio.DirectByteBuffer
 ByteBuffer buf = ByteBuffer.allocateDirect(16);
 ```
 
@@ -2161,4 +2161,26 @@ ChannelFuture future = channel.writeAndFlush(xxxx).addListener(promise -> {
        log.error("error", cause);
    } 
 });
+```
+
+
+
+# 使用Netty过程中遇到的问题点记录
+
+## 1、Netty处理TCP的半关闭
+
+一般情况下客户端与服务端交互时会直接关闭socket通道（左图），但也有客户端发送完数据后关闭输出但仍能接收数据的情况（右图客户端发送Fin）
+
+![image-20230627110010231](image\image-20230627110010231.png)
+
+Netty的服务端默认是无法处理这种情况的，在Handler的channelRead方法中调用channel.isWritable()方法会返回false。
+
+解决方法是将ChannelOption.ALLOW_HALF_CLOSURE改为true，开启netty对半关闭的支持，默认是false不开启
+
+```java
+new ServerBootstrap().group(bossGroup, workerGroup)
+    .channel(NioServerSocketChannel.class)
+    .childOption(ChannelOption.ALLOW_HALF_CLOSURE, true)
+    // 后续省略
+    ...
 ```
