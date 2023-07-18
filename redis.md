@@ -1,4 +1,4 @@
-# Redis
+# Redis基础
 
 非关系型数据库NoSQL（Not Only SQL）的一种 ，内存存储，并且不记录关系，是关系型数据库的一种补充，MongoDB、HBase都是NoSQL， MongoDB适合记录文档信息，图片信息则适合用分布式系统文件如FastDFS集群存储，搜索关键字适合用ES、solr、Lucene等存储。
 
@@ -1614,7 +1614,7 @@ Map<Integer, List<Map.Entry<String, String>>> result = map.entrySet()
 
 **Spring的Redis客户端内部以并行slot解决了这个问题（Lettuce）**
 
-建议直接使用Spring提供的StringRedisTemplate去尽显集群下的批处理，而不是自己实现（Jedis）
+建议直接使用Spring提供的StringRedisTemplate去进行集群下的批处理，而不是自己实现（Jedis）
 
 
 
@@ -1762,6 +1762,203 @@ client list
 1. 避免大集群，集群节点数不要太多，最好少于1000，如果业务庞大，则建立多个集群
 2. 避免在单个物理机中运行太多的Redis实例
 3. 配置合适的cluster-node-timeout值
+
+
+
+# Redis底层原理
+
+## 1、底层数据结构
+
+### 1.1、动态字符串SDS
+
+Redis构建了一种新的字符串结构，简称为动态字符串（**S**imple **D**ynamic **S**tring），简称为SDS
+
+源码如下：
+
+```c
+#define SDS_TYPE_5	0
+#define SDS_TYPE_8	1
+#define SDS_TYPE_16	2
+#define SDS_TYPE_32	3
+#define SDS_TYPE_64	4
+
+struct __attribute__ ((__packed__)) sdshdr8 {
+    uint8_t len; /* buf已保存的字符串字节数，不包含结束标识*/
+    uint8_t alloc; /* buf申请的总的字节数，不包含结束标识*/
+    unsigned char flags; /* 不同SDS的头类型，用来控制SDS的头大小*/
+    char buf[];
+};
+```
+
+<img src="image\image-20230718114420657.png" alt="image-20230718114420657" style="zoom:50%;" />
+
+
+
+#### SDS动态扩容
+
+* 新的字符串小于1M：新空间为扩展后字符串长度的二倍 + 1
+* 新的字符串大于1M：新空间为扩展后字符串长度 + 1M + 1。称为内存预分配
+
+多申请一部分的原因是向操作系统申请内存需要切换到内核态，这是个耗时操作，频繁切换会导致性能下降，所以预分配来避免频繁向操作系统申请来提高性能。
+
+<img src="image\image-20230718115648362.png" alt="image-20230718115648362" style="zoom:50%;" />
+
+优点：
+
+1. 获取字符串长度的时间复杂度变为O(1)
+2. 支持动态扩容
+3. 减少内存分配次数
+4. 二进制安全
+
+
+
+### 1.2、IntSet
+
+IntSet是Redis集合中Set的一种实现方式，基于整数数组来实现，并且具备长度可变、有序等特点。
+
+源码如下：
+
+```c
+/* encodeing包含三种模式，表示存储的整数大小不同*/
+# define INTSET_ENC_INT16 (sizeof(int16_t)) /* 2字节整数，范围类似java的short*/
+# define INTSET_ENC_INT32 (sizeof(int32_t)) /* 4字节整数，范围类似java的int*/
+# define INTSET_ENC_INT64 (sizeof(int64_t)) /* 8字节整数，范围类似java的long*/
+
+typedef struct intset {
+    uint32_t encoding; /* 编码方式，支持存放16位、32位、64位整数*/
+    uint32_t length; /* 元素个数*/
+    int8_t contents[]; /* 整数数组，保存集合数据*/
+} intset;
+```
+
+<img src="image\image-20230718143304782.png" alt="image-20230718143304782" style="zoom:50%;" />
+
+
+
+#### IntSet升级
+
+当添加的数字超过了对应编码格式表示的范围，IntSet会**自动升级**编码方式到合适的大小：
+
+1. 升级编码模式至合适的大小，并按照新的编码方式及元素个数扩容数组
+2. 倒序依次将数组中的元素拷贝到扩容后的正确位置（因为正序会直接覆盖多个后续字节，丢失原有数据）
+3. 将待添加元素放入数组末尾
+4. 最后，将IntSet的encoding属性改为对应的编码格式，并将length+1
+
+<img src="image\image-20230718145800277.png" alt="image-20230718145800277" style="zoom:50%;" />
+
+
+
+**特点：**
+
+1. Redis会确保IntSet中的元素唯一、有序
+2. 具备类型升级机制（通过使用尽可能小的编码格式来），可以节省内存空间
+3. 底层采用二分查找方式来查询
+
+
+
+### 1.3 Dict
+
+Redis是一个键值型的数据库，而键与值的映射正式通过Dict来实现的
+
+Dict由三部分组成，分别是：哈希表（DictHashTable）、哈希节点（DictEntry）、字典（Dict）
+
+```c
+typedef struct dictht {
+	// entry数组
+    // 数组中保存的是指向entry的指针
+    dictEntry **table;
+    // 哈希表大小，是2的n次幂
+    unsigned long size;
+    // 哈希表大小的掩码，等于总size - 1
+    unsigned long sizemask;
+    // entry个数
+    unsigned long used;
+} dictht;
+
+typedef struct dictEntry {
+    void *key; //键
+    union {
+        void *val;
+        uint64_t u64;
+        int64_t s64;
+        double d;
+    } v; // 值
+    // 下一个Entry的指针
+    struct dictEntry *next;
+} dictEntry;
+```
+
+当向Dict添加键值对时，Redis现根据key计算出hash值（h），然后利用 h & sizemask来计算元素应该存储到数组的哪个索引位置
+
+<img src="image\image-20230718163346582.png" alt="image-20230718163346582" style="zoom:50%;" />
+
+
+
+```c
+typedef struct dict {
+	dictType *type; // dict类型，内置不同的hash函数
+    void *privdata; // 私有数据，在做特殊hash运算时使用
+    dictht ht[2]; // 一个Dict包含两个哈希表，其中一个是当前数据，另一个一般是空，rehash时使用
+    long rehashidx; // rehash进度，-1表示未进行
+    int16_t pauserehash; // rehash是否暂停，1则暂停，0则继续
+} dict;
+```
+
+<img src="image\image-20230718163957696.png" alt="image-20230718163957696" style="zoom: 33%;" />
+
+
+
+#### Dict的扩容
+
+Dict中的HashTable就是数组结合的单向链表的实现，当集合中元素较多时，必然导致哈希冲突增多，链表过长，则查询效率会大大降低。
+
+Dict在每次新增时都会检查**负载因子**（LoadFactor=use/size），满足以下两种情况的时候会触发**哈希扩容：**
+
+* 哈希表的LoadFactor >= 1，并且服务没有执行bgsave或者bgrewriteaof等后台进程；
+* 哈希表的LoadFactor >  5;
+
+
+
+#### Dict的缩容
+
+除了扩容外，每次删除元素时，也会对负载因子做检查，当size> 4 且 LoadFactor < 0.1时，会做哈希表收缩。
+
+
+
+#### Dict的rehash
+
+不管是扩容还是缩容，必定会创建新的哈希表，导致哈希表的size和sizemask变化，而key的查询与sizemask有关。因此必须对哈希表中的每一个key重新计算索引，插入新的哈希表，这个过程称为rehash。
+
+但Dict的rehash并不是一次性完成的。若Dict中包含大量数据，一次rehash完成极有可能导致主线程阻塞，因此Dict的rehash是分多次、渐进式地完成的，因此称为**渐进式rehash**。过程如下：
+
+1. 重新计算hash的realSize，值取决于当前是要做扩容还是缩容：
+   * 扩容：新size为第一个大于等于dict.ht[0].used + 1的2^n^
+   * 缩容：新的size为第一个大于等于dict.ht[0].used的2^n^（不小于4）
+2. 按照新的realSize申请内存空间，创建dictht，并赋值给dict.ht[1]
+3. 设置dict.rehashidex=0，标识开始rehash
+
+​	~~4. 将dict.ht[0]中的每一个dictEntry都rehash到dict.ht[1]~~
+
+	4. 每次执行新增、查询、修改、删除操作时，都检查一下dict.rehashidx是否大于-1，如果是则将dict.ht[0].table[rehashidx]的entry链表rehash到dict.ht[1]，并且将rehashidx++。直至dict.ht[0]的所有数据都rehash到dict.ht[1]
+	4. 将dict.ht[1]赋值给dict.ht[0]，给dict.ht[1]初始化为空哈希表，释放原来dict.ht[0]的内存
+	4. 将rehashidx赋值为-1，代表rehash结束
+	4. 在rehash过程中，新增操作，则直接写入dict.ht[1]，查询、修改和删除则会在dict.ht[0]和dict.ht[1]依次查找并执行。这样可以确保dict.ht[0]的数据只减不增，随着rehash最终为空。
+
+
+
+### 1.4 ZipList
+
+ZipList是一种特殊的“双端链表”，由一系列特殊编码的连续内存块组成。可以在任意一端进行压入/弹出操作，并且该操作的时间复杂度为O(1)。
+
+
+
+
+
+
+
+
+
+
 
 
 # Redis使用中遇到的问题
