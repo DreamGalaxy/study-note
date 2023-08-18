@@ -1939,10 +1939,10 @@ Dict在每次新增时都会检查**负载因子**（LoadFactor=use/size），�
 
 ​	~~4. 将dict.ht[0]中的每一个dictEntry都rehash到dict.ht[1]~~
 
-	4. 每次执行新增、查询、修改、删除操作时，都检查一下dict.rehashidx是否大于-1，如果是则将dict.ht[0].table[rehashidx]的entry链表rehash到dict.ht[1]，并且将rehashidx++。直至dict.ht[0]的所有数据都rehash到dict.ht[1]
-	4. 将dict.ht[1]赋值给dict.ht[0]，给dict.ht[1]初始化为空哈希表，释放原来dict.ht[0]的内存
-	4. 将rehashidx赋值为-1，代表rehash结束
-	4. 在rehash过程中，新增操作，则直接写入dict.ht[1]，查询、修改和删除则会在dict.ht[0]和dict.ht[1]依次查找并执行。这样可以确保dict.ht[0]的数据只减不增，随着rehash最终为空。
+4. 每次执行新增、查询、修改、删除操作时，都检查一下dict.rehashidx是否大于-1，如果是则将dict.ht[0].table[rehashidx]的entry链表rehash到dict.ht[1]，并且将rehashidx++。直至dict.ht[0]的所有数据都rehash到dict.ht[1]
+4. 将dict.ht[1]赋值给dict.ht[0]，给dict.ht[1]初始化为空哈希表，释放原来dict.ht[0]的内存
+4. 将rehashidx赋值为-1，代表rehash结束
+4. 在rehash过程中，新增操作，则直接写入dict.ht[1]，查询、修改和删除则会在dict.ht[0]和dict.ht[1]依次查找并执行。这样可以确保dict.ht[0]的数据只减不增，随着rehash最终为空。
 
 
 
