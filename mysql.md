@@ -344,6 +344,18 @@ Memory引擎的表数据是存储在内存中的，由于受到硬件问题或�
 
 
 
+InnoDB的指针占用6字节，主键如果为bigint，占用8字节
+
+一页可以存储的索引节点数量 通过 n * 8 + (n + 1) * 6 = 16 * 1024（一页16k）可以算出约为1170，指针数量则为1171
+
+b+树的高度为2时，则可以存储 1171 * (16k / 每行数据大小)，如果一行数据1k，则可以存储18736
+
+b+树的高度为3时，则可以存储1171 * 1171 * (16k / 每行数据大小)，如果一行数据1k，则可以存储21,939,856
+
+
+
+
+
 #### 5.1.2、Hash：
 
 * 哈希索引就是采用一定的hash算法，将键值换算成新的hash值，映射到对应的槽位上，然后存储在hash表中
@@ -397,5 +409,63 @@ Memory引擎的表数据是存储在内存中的，由于受到硬件问题或�
 
 
 
+### 5.3、索引语法
 
+* 创建索引
+
+  ```mysql
+  CREATE [UNIQUE|FULLTEXT] INDEX index_name ON table_name (index_col_name,...);
+  ```
+
+* 查看索引
+
+  ```mysql
+  SHOW INDEX FROM table_name;
+  ```
+
+* 删除索引
+
+  ```mysql
+  DROP INDEX index_name ON table_name;
+
+
+
+### 5.4、SQL性能分析
+
+#### 5.4.1、SQL执行频率
+
+ MySQL客户端连接成功后，通过show [session|global] status 命令可以提供服务器的状态信息。通过如下指令，可以查看当前数据库的INSERT、UPDATE、DELETE、SELECT的访问次数（7个下划线）
+
+```mysql
+SHOW GLOBAL STATUS LIKE 'Com_______';
+```
+
+
+
+#### 5.4.2、慢查询日志
+
+慢查询日志记录了所有执行时间超过指定参数（long_query_time，单位：秒，默认10秒）的所有SQL语句的日志
+
+MySQL的慢查询日志默认没有开启，需要在MySQL的配置文件（/etc/my.cnf）中配置如下信息：
+
+```shell
+# 开启MySQL慢日志查询开关
+slow_query_log=1
+# 设置慢日志的时间为2秒，SQL语句执行时间超过2秒，就会视为慢查询，记录慢查询日志
+long_query_time=2
+```
+
+配置后通过 `systemctl restart mysql` 重启mysql服务 
+
+相关日志存储在/var/lib/mysql/localhost-slow.log中
+
+
+
+#### 5.4.3、profile详情
+
+show profiles能够在做SQL优化时帮助我们了解时间都耗费到哪里了。通过having_profiling参数，能够看到当前MySQL是否支持profile操作：
+
+```mysql
+SELECT @@have_profiling;
+```
 
