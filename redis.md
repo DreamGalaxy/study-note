@@ -2040,6 +2040,144 @@ ZipList在这种特殊情况下产生的连续多次空间扩展操作称之为*
 
 
 
+### 1.5、QuickList
+
+Redis在3.2版本引入了新的数据结构QuickList，它是一个双端链表，只不过链表中的每个节点都是一个ZipList。
+
+解决的问题：
+
+1. 限制了每个ZipList的长度和entry的大小，避免了内存占用较多、申请内存效率低下的问题
+2. 创建多个ZipList来分片存储数据，避免存储大量数据时超出ZipList的最佳上限
+3. 统一管理避免数据拆分后比较分散，不方便管理和查找
+
+
+
+![image-20230904230215538](image\image-20230904230215538.png)
+
+为了避免QuickList中的每个ZipList中entry过多，Redis提供了一个配置项：<font color="red">list-max-ziplist-size</font>来限制，可通过`config get/set list-max-ziplist-size`查看设置
+
+* 如果值为正，则代表ZipList的允许的entry个数的最大值
+* 如果值为负，则代表ZipList的最大内存大小，分5种情况：
+  * -1：每个ZipList的内存占用不能超过4kb
+  * **-2（默认值）：每个ZipList的内存占用不能超过8kb**
+  * -3：每个ZipList的内存占用不能超过16kb
+  * -4：每个ZipList的内存占用不能超过32kb
+  * -5：每个ZipList的内存占用不能超过64kb
+
+
+
+QuickList还可以对节点的ZipList做压缩。通过配置项 list-compress-depth 来控制。因为链表一般从首尾访问较多，所以首尾是不压缩的，这个参数是控制首尾不压缩的节点个数：
+
+* 0：默认值，代表不压缩
+* 正整数n：标识QuickList的首尾各有n个节点不压缩，中间节点压缩
+
+
+
+QuickList和QuickListNode的源码：
+
+```c
+typedef struct quicklist {
+    // 头节点指针
+    quicklistNode *head;
+    // 尾节点指针
+    quicklistNode *tail;
+    // 所有ziplist的entry的数量
+    unsigned long count;
+    // ziplist总数量
+    unsigned long len;
+    // ziplist的entry上限，默认值 -2
+    int fill : QL_FILL_BITS;
+    // 首尾不压缩的节点数量
+    unsigned int compress : QL_COMP_BITS;
+    // 内存重分配时的书签数量级数组，一般用不到
+    unsigned int bookmark_count : QL_BM_BITS;
+    quicklistBookmark bookmarks[];
+} quicklist;
+```
+
+
+
+```c
+typedef struct quicklistNode {
+	// 前一个节点指针
+    struct quicklistNode *prev;
+ 	// 下一个节点指针
+    struct quicklistNode *next;
+    // 当前节点的ZipList指针
+    unsigned char *zl;
+    // 当前节点的ZipList的字节大小
+    unsigned int sz;
+    // 当前节点的ZipList的entry个数
+    unsigned int count : 16;
+    // 编码方式： 1：ZipList；2：lzf压缩模式
+    unsigned int encoding : 2;
+    // 数据容器类型（预留）：1：其他；2：ZipList
+    unsigned int container : 2;
+    // 是否被解压缩。1：则说明被解压缩了，将来要重新压缩
+    unsigned int recompress : 1;
+    // 测试用
+    unsigned int attempted_compress : 1;
+    // 预留字段
+    unsigned int extra : 10;
+} quicklistNode;
+```
+
+<img src="image\image-20230904233246967.png" alt="image-20230904233246967" style="zoom:50%;" />
+
+
+
+### 1.6、SkipList
+
+SkipList（跳表）是链表但与传统链表相比有几点差异：
+
+* 元素按照升序排列存储
+* 节点可能包含多个指针，指针跨度不同
+
+<img src="image\image-20230904233852560.png" alt="image-20230904233852560" style="zoom:50%;" />
+
+```c
+typedef struct zskiplist {
+	// 头尾节点指针
+    struct zskiplistNode *header, *tail;
+    // 节点数量
+    unsigned long length;
+    // 最大的索引层级，默认是1
+    int level;
+} zskiplist;
+```
+
+```c
+typedef struct zskiplistNode {
+    // 节点存储的值
+	sds ele;
+    // 节点分数，排序、查找用
+    double score;
+    // 前一个节点指针
+    struct zskiplistNode *backward;
+    // 多级索引数组
+    struct zskipListLevel {
+        // 下一个节点指针
+        struct zskiplistNode *forward;
+        // 索引跨度
+        unsigned long span;
+    } level[];
+} zskiplistNode;
+```
+
+![image-20230904235643424](image\image-20230904235643424.png)
+
+
+
+#### 特点：
+
+* 跳表是一个双向链表，每个节点包含score和ele值
+* 节点按照score值排序，score值一样则按照ele字典排序
+* 每个节点都可以包含多层指针，层数是1到32之间的随机数
+* 不同层指针到下一个节点的跨度不同，层级越高，跨度越大
+* 增删改查效率与红黑树基本一致，实现却更简单
+
+
+
 
 
 
