@@ -1,5 +1,15 @@
 # linux命令
 
+## grep
+
+grep -A n xxx yyy.log   可以显示指定内容及之后的n行
+
+grep -B n xxx yyy.log   可以显示指定内容及之前的n行
+
+grep -C n xxx yyy.log   可以显示指定内容及前后的各n行
+
+
+
 ## SCP 远程复制命令
 
 scp [-R] 本地服务器文件 root@ip:目标服务器地址

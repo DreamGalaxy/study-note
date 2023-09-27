@@ -37,7 +37,7 @@ EXPLAIN
 * 内外表数据相当时性能差别不大
 * in不会处理null，not in遇到null不会返回数据
 
-* not in和not exists:如果查询语句使用了not in，那么内外表都进行全表扫描，没有用到索引;而not extsts的子查询依然能用到表上的索引。所以无论那个表大，用not exists都比not in要快
+* not in和not exists:如果查询语句使用了not in，那么内外表都进行全表扫描，没有用到索引；而not extsts的子查询依然能用到表上的索引。所以无论那个表大，用not exists都比not in要快
 
 
 
