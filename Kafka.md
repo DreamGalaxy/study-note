@@ -92,7 +92,7 @@ bin/kafka-topics.sh --list --bootstrap-server kafkaip:端口
 ### 2.3生产消息到Kafka
 
 ```shell
-bin/kafka-console producer.sh --broker-list kafkaip:端口 --topic test
+bin/kafka-console-producer.sh --broker-list kafkaip:端口 --topic test
 ```
 
 
