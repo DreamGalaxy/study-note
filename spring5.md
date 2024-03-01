@@ -340,9 +340,79 @@ public class A02Application {
 
 #### 1.3.3、Bean的生命周期
 
+构造 - 注入 - 初始化 - 销毁
 
 
-#### 1.3.4、内嵌容器、注册DispatcherServlet
+
+相关扩展点
+
+```java
+@Slf4j
+@Component
+public class MyBeanPostProcessor implements InstantiationAwareBeanPostProcessor, DestructionAwareBeanPostProcessor {
+
+    @Override
+    public void postProcessBeforeDestruction(Object bean, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessBeforeDestruction】 <<<< 销毁前执行，如@PreDestroy");
+        }
+    }
+
+    @Override
+    public Object postProcessBeforeInstantiation(Class<?> beanClass, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessBeforeInstantiation】 <<<< 实例化之前执行，这里返回的对象会替换掉原版本的bean");
+        }
+        // null表示保持不变
+        return null;
+    }
+
+    @Override
+    public boolean postProcessAfterInstantiation(Object bean, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessAfterInstantiation】 <<<< 实例化之后执行，这里如果返回false会跳过依赖注入阶段");
+//            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public PropertyValues postProcessProperties(PropertyValues pvs, Object bean, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessProperties】 <<<< 依赖注入阶段执行，如@Autowired、@Value、@Resource");
+        }
+        return pvs;
+    }
+
+    @Override
+    public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessBeforeInitialization】 <<<< 初始化之前执行，这里返回的对象会替换掉原版本的bean，如@PostConstruct、@ConfigurationProperties");
+        }
+        return bean;
+    }
+
+    @Override
+    public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+        if ("lifeCycleBean".equals(beanName)) {
+            log.info("【postProcessAfterInitialization】 <<<< 初始化之后执行，这里返回的对象会替换掉原版本的bean，如代理增强");
+        }
+        return bean;
+    }
+}
+```
+
+
+
+#### 1.3.4、Bean后处理器
+
+作用：为Bean生命周期各个阶段提供扩展
+
+
+
+
+
+#### 1.3.5、内嵌容器、注册DispatcherServlet
 
 
 
