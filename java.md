@@ -2,6 +2,30 @@
 
 
 
+## jvm打印gc日志是否会影响jvm性能？
+
+
+
+jstat命令：
+
+jstat查询的数据都是JVM性能计数器中存储的内容（[Performance Counters](http://openjdk.java.net/groups/hotspot/docs/Serviceability.html#bjvmstat)），jstat读取通过mmap内存映射读取数据，在/tmp/hsperfdata_username/vmid中
+
+
+
+jvm打印日志：
+
+日志会阻塞gc：https://blog.csdn.net/q66562636/article/details/125339109
+
+磁盘的I/O、日志的详细程度均会影响日志打印速度
+
+
+
+jdk9中更新了日志打印的框架，有了日志级别，且支持滚动更新
+
+jdk17中更新了异步日志参数-Xlog:async
+
+
+
 
 
 ## GraalVM
